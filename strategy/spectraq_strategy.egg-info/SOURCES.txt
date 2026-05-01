@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+spectraq_strategy/__init__.py
+spectraq_strategy.egg-info/PKG-INFO
+spectraq_strategy.egg-info/SOURCES.txt
+spectraq_strategy.egg-info/dependency_links.txt
+spectraq_strategy.egg-info/requires.txt
+spectraq_strategy.egg-info/top_level.txt

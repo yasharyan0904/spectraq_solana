@@ -1,0 +1,42 @@
+[package]
+name = "spectraq_vault"
+version = "0.1.0"
+description = "SpectraQ non-custodial trading vault — Anchor program"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "spectraq_vault"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+# Demo safety net: enables admin-only `mock_callback_signal` for the hackathon
+# fallback path when the Arcium MPC cluster is unreachable.
+mock-mpc = []
+# Forward compat — Mode 2 basket accounting (v2).
+mode-2 = []
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "arcium-anchor/idl-build",
+]
+
+[dependencies]
+anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.32.1", features = ["token", "associated_token"] }
+arcium-anchor = "=0.9.7"
+arcium-macros = "=0.9.7"
+arcium-client = { version = "=0.9.7", default-features = false }
+pyth-solana-receiver-sdk = "1.1.0"
+# Match the pins arcium 0.9.7 hello_world uses — newer versions pull edition2024
+# crates that the v1.51 SBF Rust 1.84 toolchain cannot parse.
+unicode-segmentation = "=1.12.0"
+indexmap = "=2.7.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

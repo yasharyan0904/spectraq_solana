@@ -1,0 +1,30 @@
+[toolchain]
+anchor_version = "0.32.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+spectraq_vault = "96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN"
+
+[programs.localnet]
+spectraq_vault = "96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+# Devnet RPC — Helius. The URL is templated from .env at run time via the
+# AnchorClient setup; Anchor.toml itself uses the public devnet endpoint as a
+# fallback so `anchor test --skip-local-validator --provider.cluster devnet`
+# works without a Helius key. Override per-session with:
+#   ANCHOR_PROVIDER_URL="$HELIUS_RPC_URL" anchor test --skip-deploy
+[test.validator]
+url = "https://api.devnet.solana.com"
+
+[scripts]
+test = "pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

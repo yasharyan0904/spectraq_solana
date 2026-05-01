@@ -1,0 +1,46 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Solana keypairs (NEVER commit upgrade authority or admin/agent keys)
+**/id.json
+**/admin*.json
+**/agent*.json
+**/demo*.json
+target/deploy/*-keypair.json
+
+# Build artifacts
+target/
+.anchor/
+node_modules/
+**/node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Frontend
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+
+# Python
+strategy/.venv/
+strategy/__pycache__/
+strategy/**/__pycache__/
+strategy/**/*.pyc
+strategy/.ipynb_checkpoints/
+strategy/data/
+strategy/notebooks/.ipynb_checkpoints/
+
+# Logs / scratch
+*.log
+logs/
+.DS_Store
+.idea/
+.vscode/
+
+# Anchor IDL leftovers
+**/*.so

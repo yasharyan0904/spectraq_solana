@@ -1,0 +1,39 @@
+{
+  "name": "spectraq",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SpectraQ — non-custodial AI trading vault on Solana (Anchor + Arcium MPC + Jupiter v6 + Next.js)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "preflight": "bash scripts/preflight.sh",
+    "build:vault": "anchor build",
+    "test:vault": "anchor test --skip-deploy",
+    "agent": "pnpm --filter agent start",
+    "agent:dev": "pnpm --filter agent dev",
+    "frontend": "pnpm --filter frontend dev",
+    "frontend:build": "pnpm --filter frontend build"
+  },
+  "devDependencies": {
+    "@arcium-hq/client": "^0.9.7",
+    "@pythnetwork/hermes-client": "^3.1.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.14.0",
+    "@types/chai": "4.3.16",
+    "@types/mocha": "10.0.6",
+    "@types/node": "20.14.10",
+    "chai": "4.5.0",
+    "mocha": "10.7.3",
+    "ts-mocha": "10.0.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.5.4"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.32.1",
+    "@solana/spl-token": "0.4.8",
+    "@solana/web3.js": "1.95.4"
+  }
+}

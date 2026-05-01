@@ -1,0 +1,26 @@
+# Arcium MXE deploy config — devnet
+#
+# Cluster offsets:
+#   456  = devnet (this project — locked here until further notice)
+#   2026 = mainnet-alpha
+#
+# Deploy ordering MUST be:
+#   1. arcium build
+#   2. arcium deploy   --cluster-offset 456 --recovery-set-size 4
+#   3. arcium init-mxe --program-id <vault_program_id>
+#   4. arcium upload-circuits --program-id <vault_program_id>
+#
+# Uploading circuits BEFORE init-mxe returns success but the cluster silently
+# refuses the computations. This is the #1 Arcium gotcha — see scripts/init-mxe.sh.
+
+[mxe]
+cluster_offset = 456
+recovery_set_size = 4
+
+[programs.devnet]
+spectraq_vault = "96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN"
+
+[circuits]
+# Built by `arcium build --skip-program` (see prompt 2).
+# Uploaded to the cluster in prompt 3 via `arcium upload-circuits`.
+compute_ma_signal = { path = "build/compute_ma_signal.arcis" }

@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: spectraq-strategy
+Version: 0.1.0
+Summary: SpectraQ — MA crossover + MCPT validation suite (offline only, not runtime)
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pandas>=2.2
+Requires-Dist: numpy>=1.26
+Requires-Dist: ccxt>=4.4
+Requires-Dist: matplotlib>=3.9
+Requires-Dist: numba>=0.60
+Requires-Dist: pyarrow>=17.0
+Requires-Dist: ipykernel>=6.29
+Requires-Dist: jupyterlab>=4.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+
+# SpectraQ — Strategy validation
+
+This directory holds the offline validation suite (MA crossover backtest +
+four-stage Monte-Carlo Permutation Test framework). It is **not** a runtime
+component — its outputs justify the live strategy parameters loaded by the
+agent.
+
+Filled in by prompt 7. Placeholder only.
+
+```bash
+cd strategy
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```

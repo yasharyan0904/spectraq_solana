@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+/* SpectraQ design tokens. Single dark theme — no light variant. */
+@theme inline {
+  --color-bg: #0a0a0f;
+  --color-surface: #13131a;
+  --color-surface-2: #18181f;
+  --color-border: #1f1f2a;
+  --color-text: #f5f5f7;
+  --color-muted: #8a8a99;
+  --color-positive: #3ddc84;
+  --color-negative: #ff5151;
+  --color-brand: #6e5bff;
+  --color-brand-dim: #4d3fb8;
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --radius-card: 14px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Numbers, addresses, anything that wants tabular alignment. */
+.mono,
+.tabular {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Wallet-adapter modal overrides — match SpectraQ surface palette. */
+.wallet-adapter-modal-wrapper {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+}
+.wallet-adapter-modal-title {
+  color: var(--color-text) !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: var(--color-surface-2) !important;
+  color: var(--color-text) !important;
+}
+.wallet-adapter-button-trigger {
+  background: var(--color-brand) !important;
+  font-family: var(--font-sans) !important;
+  font-weight: 500 !important;
+  border-radius: 10px !important;
+  height: 40px !important;
+  padding: 0 16px !important;
+}
+.wallet-adapter-button-trigger:not([disabled]):hover {
+  background: var(--color-brand-dim) !important;
+}
+
+/* Scrollbar — narrow & dark. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a2a3a;
+}
+
+/* Subtle pulse for live signal indicator. */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.pulse-dot {
+  animation: pulse-dot 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

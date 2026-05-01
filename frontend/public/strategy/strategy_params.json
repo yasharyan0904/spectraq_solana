@@ -1,0 +1,26 @@
+{
+  "fast_n": 10,
+  "slow_n": 30,
+  "threshold_bps": 0,
+  "validation": {
+    "validated_at": "2026-04-29T22:28:54.383316+00:00",
+    "verdict": "no_ship",
+    "is_pvalue": 0.34165834165834164,
+    "wf_pvalue": 0.47761194029850745,
+    "is_sharpe": 1.328136319057018,
+    "wf_sharpe": -0.3968053757162255,
+    "wf_total_return": -0.32353013012877885,
+    "wf_max_dd": -0.6488040918632567,
+    "is_best_fast_n": 17,
+    "is_best_slow_n": 80,
+    "data_window": {
+      "start": "2024-01-01",
+      "end": "2026-01-01",
+      "timeframe": "1h",
+      "bars": 17545
+    },
+    "n_is_permutations": 1000,
+    "n_wf_permutations": 200
+  },
+  "recommendation": "Validation FAILED \u2014 strategy did not clear the four-stage MCPT gate. The exported parameters are the agent's hardcoded defaults; the agent will compute MA crossover signals but those signals have no demonstrated edge over random. Operator should either (a) keep the strategy disabled in production, (b) retune the search space and re-run validation, or (c) use SpectraQ as a demo only with this verdict surfaced to depositors."
+}

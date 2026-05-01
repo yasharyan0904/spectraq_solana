@@ -1,0 +1,270 @@
+# SpectraQ
+
+> Trustless asset allocation. Programmatically enforced.
+
+SpectraQ is a non-custodial AI trading vault on Solana. Users deposit USDC
+or SOL into a program-owned vault and receive proportional SPL share tokens
+(`SPQS`). An off-chain TypeScript agent reads market data, encrypts a price
+window, and submits it to an Arcium MPC circuit that computes a
+moving-average crossover signal. The threshold-decrypted signal returns to
+the vault via callback. The agent then executes a USDC↔SOL swap through
+Jupiter (Pro/Station endpoint, `api.jup.ag/swap/v1`) — but the vault
+program structurally validates that swap proceeds land in the vault's own
+ATA, and never anywhere else.
+
+**Withdrawal is always available** regardless of agent state, signal state,
+or pending MPC computations.
+
+What it IS: a trustless asset-allocation protocol, a non-custodial strategy
+vault, a transparent MCPT-validated trading framework.
+What it is NOT: a hedge fund, an index fund, a "guaranteed return"
+product, custodial under any framing.
+
+---
+
+## 5-minute Quick Start
+
+Prereqs: Solana CLI ≥2.3, Anchor 0.32.1, Node ≥20 + pnpm ≥9, Rust toolchain
+linked via `arcup`. Run `bash scripts/preflight.sh` to verify.
+
+```bash
+git clone <repo> spectraq
+cd spectraq
+cp .env.example .env                      # then add HELIUS_API_KEY
+pnpm install
+bash scripts/demo.sh                      # ⇒ open http://localhost:3000
+```
+
+`scripts/demo.sh` is **idempotent**:
+
+1. preflight (toolchain + funded devnet wallet)
+2. `anchor build && anchor deploy` — skipped if program already on devnet
+3. `init-mxe.sh` — skipped if MXE already registered
+4. generate vault-admin + agent keypairs (separate from upgrade authority)
+5. `initialize_vault` — skipped if PDA exists
+6. seed demo funds: 10 USDC + 0.1 wSOL deposit
+7. write `frontend/.env.local` from `.env.demo` (so the dashboard derives
+   the correct vault PDA from the live admin pubkey, not a stale default)
+8. start the agent (`MOCK_MPC=true` for reliable demo — Arcium devnet
+   callbacks have multi-minute latency)
+9. start the Next.js frontend at `:3000`
+10. echo Solana Explorer links + log paths
+
+Stop with `bash scripts/demo.sh --stop`. Live logs at `logs/demo_run_*.log`.
+
+---
+
+## Architecture
+
+```
+                                ┌──────────────────────┐
+                                │     User wallet      │
+                                │  (Phantom/Solflare)  │
+                                └──────────┬───────────┘
+                                           │ deposit / withdraw
+                                           ▼
+        ┌──────────────────────────────────────────────────────────┐
+        │              spectraq_vault  (Anchor program)            │
+        │                                                          │
+        │  VaultState PDA  ──  share_mint  ──  usdc_vault ATA      │
+        │                  ──  sol_vault  ATA                      │
+        │                                                          │
+        │  initialize_vault  deposit_usdc  deposit_sol  withdraw   │
+        │  request_signal_computation   compute_ma_signal_callback │
+        │  execute_trade   settle_pnl                              │
+        └────────┬─────────────────┬──────────────┬────────────────┘
+                 │                 │              │
+                 │ queue_comp      │ Pyth read    │ invoke_signed
+                 ▼                 ▼              ▼
+        ┌──────────────┐    ┌────────────┐   ┌────────────────┐
+        │   Arcium     │    │   Pyth     │   │  Jupiter v6    │
+        │   MXE        │    │ price      │   │  router        │
+        │ (offset 456) │    │ feeds      │   │                │
+        └──────┬───────┘    └────────────┘   └────────────────┘
+               │ threshold-decrypted SignalOutput
+               ▼ (callback)
+        ┌──────────────────────┐
+        │    Off-chain agent   │   ── price feed ──▶ Pyth / Binance
+        │    (TypeScript)      │   ── encrypt ─────▶ Arcium client
+        │  agent ≠ admin key   │   ── trade ───────▶ Jupiter API
+        └──────────────────────┘
+```
+
+Devnet artifacts:
+
+| Component        | Value                                               |
+|------------------|-----------------------------------------------------|
+| Program ID       | `96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN`      |
+| Arcium MXE       | `HjiD5aGYnE3unNnKh89xF7thQrF636i2RUw6jV2jNnKt`      |
+| Cluster offset   | 456                                                 |
+| Recovery set     | 4                                                   |
+| USDC mint        | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`      |
+| Pyth SOL/USD     | `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE`      |
+
+---
+
+## Non-custodial invariants
+
+These are enforced by the Anchor program; tests in `tests/01_vault.ts`
+through `tests/04_jupiter.ts` assert each one.
+
+1. **No instruction transfers vault USDC/SOL to any address except**
+   (a) the original depositor on `withdraw`, or (b) the Jupiter program on
+   `execute_trade`, with `destination = vault's own ATA`.
+   → `programs/spectraq_vault/src/instructions/execute_trade.rs:151-168`
+   (computes `expected_dest = ATA(vault, dest_mint)`, rejects mismatches).
+2. **`agent ≠ admin` at init.**
+   → `programs/spectraq_vault/src/instructions/initialize_vault.rs:66-70`
+   (`require_keys_neq!(admin, agent, AgentEqualsAdmin)`).
+3. **`execute_trade` and `settle_pnl` are gated to the agent pubkey only.**
+   → `programs/spectraq_vault/src/instructions/execute_trade.rs:38-45` (the
+   `agent` Signer constraint) and `settle_pnl.rs` (parallel guard).
+4. **`withdraw` works regardless of `signal_state`, `pending_computation`,
+   or any agent activity** — there is no signal/agent guard in
+   `withdraw_handler`.
+   → `programs/spectraq_vault/src/instructions/withdraw.rs:72+`.
+5. **Trade size is structurally capped at 30% of source ATA balance.**
+   → `MAX_TRADE_SIZE_BPS = 3_000` in
+   `programs/spectraq_vault/src/constants.rs:14`, enforced in
+   `execute_trade.rs:114-120`.
+6. **Slippage on `execute_trade` is capped at 5% from the Pyth-derived
+   expected output**, not just the user-supplied `min_amount_out`.
+   → `MAX_SLIPPAGE_BPS = 500` in `constants.rs:45`, enforced in
+   `execute_trade.rs:122-149`.
+7. **All vault arithmetic uses checked ops.** A `MathOverflow` aborts the
+   tx — search for `checked_mul`, `checked_add`, `checked_sub` across the
+   handlers.
+8. **Pyth staleness is validated on every read.**
+   `DEFAULT_MAX_AGE_SECONDS = 60s` in `programs/spectraq_vault/src/oracle.rs`;
+   used in `deposit_sol.rs` and `execute_trade.rs:122-127`.
+9. **Pyth feed-id binding.** `vault_state.sol_usd_feed_id` is set at
+   `initialize_vault` and verified on every price read — supplying a
+   different Pyth account (e.g. USDC/USD) returns `InvalidPythFeed`.
+
+---
+
+## Strategy validation (Monte Carlo Permutation Test)
+
+Methodology after Robert Pardo / Aronson MCPT — four stages, every result
+published, including failures.
+
+| Stage                       | Result (devnet build, 2026-04-29)                |
+|-----------------------------|--------------------------------------------------|
+| 1. In-sample fit            | best params (10, 30) on SOL/USDC 1h, 17 545 bars |
+| 2. IS permutation (n=1000)  | **p = 0.3417** — fails (acceptance < 0.05)       |
+| 3. Walk-forward (31 folds)  | OOS Sharpe **−0.397**, return −32.4%, dd −64.9%  |
+| 4. WF permutation (n=200)   | **p = 0.4776** — fails (acceptance < 0.05)       |
+| **Verdict**                 | **NO SHIP**                                      |
+
+The agent currently runs `MA(10, 30)` with a 30 bp threshold *as a
+demonstration only*. The strategy panel at `/strategy` surfaces the full
+verdict honestly. Source: `strategy/data/validation_result.json`,
+`strategy/notebooks/01_validate_ma_crossover.ipynb`.
+
+```bash
+cd strategy
+source .venv/bin/activate
+python scripts/run_validation.py     # writes data/validation_result.json
+python scripts/export_params.py      # publishes to agent + frontend
+jupyter lab notebooks/01_validate_ma_crossover.ipynb
+```
+
+---
+
+## Known limitations
+
+- **Jupiter does not aggregate on devnet.** Jupiter retired the
+  unauthenticated `quote-api.jup.ag/v6` host; the only live surface is
+  `api.jup.ag/swap/v1/...` (auth via `x-api-key`). Even with a valid Pro
+  key, the devnet USDC mint
+  (`4zMMC9srt5Ri…ncDU`) returns `TOKEN_NOT_TRADABLE` because Jupiter
+  routes against mainnet liquidity only. On devnet the agent attempts the
+  swap and the call shows up in the Jupiter dashboard, but the trade fails
+  at the routing layer. Mainnet beta executes normally; see
+  `tests/04_jupiter.ts` for the retry pattern.
+- **Arcium devnet callback latency** — threshold-decrypted callbacks can
+  take 60–180 s on the public devnet cluster, with occasional silent drops.
+  `MOCK_MPC=true` (default in `scripts/demo.sh`) substitutes a deterministic
+  signal computed off-chain so the live demo flows in one minute. The
+  real-MPC path is exercised by `tests/02_arcium.ts`.
+- **MA-crossover NO-SHIP verdict** — the live strategy fails MCPT, so the
+  signal driving the demo is statistically indistinguishable from random.
+  This is the honest version; do not deploy capital against it. Roadmap
+  item 3 (GA candlestick) replaces it with a Genetic Algorithm-mined
+  pattern strategy that has shown ship-grade walk-forward p-values offline.
+- **`FORCE_SIGNAL` demo override.** When `MOCK_MPC=true`, setting
+  `FORCE_SIGNAL=1` (BUY) or `FORCE_SIGNAL=0` (SELL) on the agent process
+  pins the next tick's signal regardless of the MA computation. Used to
+  drive a deterministic buy/sell beat during a live demo. Wired in
+  `agent/src/index.ts` (FORCE_SIGNAL block).
+- **Vault admin keypair (≠ program upgrade authority).** The demo uses
+  `~/.config/solana/spectraq_admin.json` as vault admin and the standard
+  `~/.config/solana/id.json` as program upgrade authority. Renouncing
+  upgrade authority is in `ROADMAP.md` as a pre-mainnet step.
+
+---
+
+## Roadmap
+
+See [`ROADMAP.md`](ROADMAP.md) for full detail. Headline items:
+
+- **Mode 2 — basket vault.** SOL + JUP + PYTH + JTO with per-asset weight
+  signals. Layout already sketched in `state.rs:54-`.
+- **GA candlestick strategy.** Replace MA-crossover with a Genetic
+  Algorithm-mined candlestick pattern strategy in the next Arcis circuit
+  (needs a larger compute budget — currently blocked on MXE memory limits
+  on devnet).
+- **Mainnet beta.** Renounce program upgrade authority, freeze IDL,
+  publish audit, switch RPC pools, raise per-trade caps.
+
+---
+
+## Security
+
+Full checklist in [`SECURITY.md`](SECURITY.md). Current status as of the
+hackathon submission:
+
+- [x] No instruction transfers funds to non-vault, non-depositor addresses.
+- [x] All math is checked.
+- [x] Agent key is logically separated from admin key (program rejects
+      `agent == admin` at init).
+- [x] Pyth staleness validated on every read.
+- [x] Trade size capped at 30% NAV.
+- [x] Slippage capped at 5% from oracle.
+- [x] Withdrawal works regardless of signal state, agent state, or pending
+      computations.
+- [ ] **Program upgrade authority not yet renounced.** Held by
+      `GwAAvyBYo84b6CVprV9w2qo4PVqVKiDStDD1o16kj6J8` for hackathon
+      iteration. See `SECURITY.md` for renunciation procedure.
+
+---
+
+## Repo layout
+
+```
+spectraq/
+├── programs/spectraq_vault/   Anchor program (Rust, Anchor 0.32.1)
+├── encrypted-ixs/             Arcis MPC circuits
+├── agent/                     TypeScript trading agent
+├── strategy/                  Python: MA + MCPT validation (offline)
+├── frontend/                  Next.js 16 App Router
+├── tests/                     Anchor + integration TS tests
+├── scripts/                   preflight, init-mxe, initialize_vault,
+│                              seed_demo_funds, demo orchestrator
+├── Anchor.toml
+├── Arcium.toml                cluster_offset = 456, recovery_set_size = 4
+└── .env.example
+```
+
+---
+
+## Demo
+
+See [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) for a 3-minute Loom outline (no
+recording — just the screen-by-screen script).
+
+---
+
+## License
+
+MIT.
