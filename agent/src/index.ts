@@ -28,6 +28,7 @@ import {
 } from "@solana/spl-token";
 import anchor from "@coral-xyz/anchor";
 import pino from "pino";
+import pretty from "pino-pretty";
 
 import { loadConfig, redactKeys, type AgentConfig } from "./config.js";
 import {
@@ -69,19 +70,30 @@ import {
 // ---------------------------------------------------------------------------
 
 function makeLogger(level: string) {
-  return pino({
-    level,
-    redact: {
-      paths: redactKeys,
-      censor: "[REDACTED]",
+  // Dual-stream: pretty colorized output to stdout (terminal users keep
+  // readable logs) AND structured JSON Lines to logs/agent.jsonl (for the
+  // dashboard's /api/agent-activity to parse cleanly).
+  const jsonPath = path.resolve(
+    import.meta.dirname,
+    "..",
+    "..",
+    "logs",
+    "agent.jsonl",
+  );
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
+  const streams: Array<{ stream: NodeJS.WritableStream }> = [
+    { stream: fs.createWriteStream(jsonPath, { flags: "a" }) },
+    { stream: pretty({ colorize: true }) },
+  ];
+  return pino(
+    {
+      level,
+      redact: { paths: redactKeys, censor: "[REDACTED]" },
+      formatters: { level: (label) => ({ level: label }) },
+      timestamp: pino.stdTimeFunctions.isoTime,
     },
-    formatters: { level: (label) => ({ level: label }) },
-    timestamp: pino.stdTimeFunctions.isoTime,
-    transport:
-      process.env.NODE_ENV === "production"
-        ? undefined
-        : { target: "pino-pretty", options: { colorize: true } },
-  });
+    pino.multistream(streams),
+  );
 }
 
 function loadIdl(programId: PublicKey): anchor.Idl {

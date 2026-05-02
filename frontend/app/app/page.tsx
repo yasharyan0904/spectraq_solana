@@ -2,12 +2,13 @@
 
 import { useWallet } from "@solana/wallet-adapter-react";
 
+import { AgentActivity } from "@/components/AgentActivity";
 import { Card, Stat } from "@/components/Card";
 import { NavChart } from "@/components/NavChart";
 import { PositionBreakdown } from "@/components/PositionBreakdown";
 import { SignalPanel } from "@/components/SignalPanel";
 import { TradesTable } from "@/components/TradesTable";
-import { formatUsdc } from "@/lib/format";
+import { formatSol, formatUsdc } from "@/lib/format";
 import { useUserPosition } from "@/lib/hooks/useUserPosition";
 import { useVaultState } from "@/lib/hooks/useVaultState";
 
@@ -30,12 +31,24 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Top stats bar */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      {/* Top stats bar — vault composition + user position at a glance */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Card>
           <Stat
             label="Vault NAV"
             value={v ? formatUsdc(BigInt(v.navUsdcE6)) : "—"}
+          />
+        </Card>
+        <Card>
+          <Stat
+            label="Vault USDC"
+            value={v ? formatUsdc(BigInt(v.usdcBalance)) : "—"}
+          />
+        </Card>
+        <Card>
+          <Stat
+            label="Vault SOL"
+            value={v ? formatSol(BigInt(v.solBalance)) : "—"}
           />
         </Card>
         <Card>
@@ -78,7 +91,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Trades */}
+      {/* Live agent activity */}
+      <AgentActivity filter="trades" limit={30} />
+
+      {/* On-chain trade events (lands when Jupiter routes — mainnet) */}
       <TradesTable />
     </div>
   );

@@ -10,16 +10,20 @@ Pre-roll checklist (do BEFORE starting the recording):
 - Sanity-check: `curl -s http://localhost:3000/api/vault` returns a
   populated `vaultPubkey` and a non-null `pythPriceE6`. If `vault: null`,
   rerun demo.sh.
+- Sanity-check: `curl -s "http://localhost:3000/api/agent-activity?filter=trades&limit=3"` returns
+  recent events. If empty, the agent's `logs/agent.jsonl` isn't being
+  written — restart the agent.
 - Frontend tab open at `http://localhost:3000` — landing page.
-- Side terminal tailing `logs/agent_*.log` so the audience sees the
-  trading loop while you talk.
 - Phantom wallet on devnet, **already approved** for the site so the popup
   is just "Confirm".
 - Solana Explorer tab queued at the vault address (you'll show it at the
   end).
 - (Optional, for a forced buy/sell beat) restart agent with
   `FORCE_SIGNAL=1` (BUY) or `FORCE_SIGNAL=0` (SELL) so the on-chain
-  signal flips on cue.
+  signal flips on cue. The Activity panel shows the override live.
+- (Optional, for the Arcium beat) restart agent with `MOCK_MPC=false`
+  so the `/app/arcium` page populates with real queue + callback events.
+  Skip if Arcium devnet is unresponsive that day.
 
 ---
 
@@ -54,25 +58,22 @@ than dressing it up."*
 ## 0:50–1:30 — Dashboard
 
 **Show:** click "Dashboard" → `/app`. Wait for vault state to populate.
-In a side terminal, `tail -f logs/agent_*.log` so the audience can see
-the agent loop in real time.
 
-**Say:** *"Vault state, live from devnet. We deposited 30 USDC and
-0.3 wSOL — there are the 52.7 SPQS shares. The Signal panel shows
-'READY' — the agent stamped a fresh BUY signal on chain. In the agent
-log you can see one tick per minute: pull prices, compute the
-MA-crossover signal, decide a trade, call Jupiter for a quote. The
-Jupiter call lands in my dashboard with the API key right now. On devnet
-Jupiter's aggregator does not route the devnet USDC mint
-(TOKEN_NOT_TRADABLE), so the swap step fails — the agent retries three
-times and moves on. On mainnet beta the same call settles. Withdrawals
-work either way."*
+**Say:** *"Vault state, live from devnet. The top bar shows the vault
+holds 30 USDC and 0.3 wSOL — that's a $55 NAV against 52.7 SPQS shares.
+The Signal panel shows the latest decision. The Agent activity feed below
+shows the loop in real time: every minute the agent pulls prices,
+computes the MA-crossover signal, decides a trade, and calls Jupiter for
+a quote. On devnet Jupiter's aggregator does not route the devnet USDC
+mint, so the swap step fails — you can see that error inline in the
+activity feed. On mainnet beta the same call settles. Withdrawals work
+either way."*
 
-**Beats:** point at: **Vault NAV**, **Total shares**, **Your shares**,
-**Your equity**. Then the Signal panel direction (LONG / FLAT / —). Then
-the agent log line `executing trade  long_open  amountIn: 9000000` and
-the matching `trade failed (ignored)` so the failure mode is in the
-open.
+**Beats:** point at: **Vault NAV**, **Vault USDC**, **Vault SOL**,
+**Your shares**, **Your equity**. Then the Signal panel direction
+(LONG / FLAT). Then scroll to the **Agent activity** panel and walk
+through the most recent three events: signal computed, trade executing,
+trade failed-on-devnet.
 
 ## 1:30–2:15 — Deposit flow
 
