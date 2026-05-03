@@ -8,9 +8,10 @@
 #   4. ensure agent keypair exists (≠ admin — program enforces it)
 #   5. initialize_vault (idempotent — skipped if PDA exists)
 #   6. seed demo funds (10 USDC + 0.1 SOL deposit)
-#   7. start agent in MOCK_MPC mode (Arcium devnet callbacks are flaky)
-#   8. start frontend in dev mode
-#   9. echo URLs + explorer links
+#   7. register Raydium CPMM pool (idempotent — uses existing pool if any)
+#   8. start agent in MOCK_MPC mode (Arcium devnet callbacks are flaky)
+#   9. start frontend in dev mode
+#  10. echo URLs + explorer links
 #
 # Logs go to logs/demo_run_<unix_ts>.log. Tail it for live status:
 #   tail -f logs/demo_run_*.log
@@ -111,7 +112,7 @@ log "admin keypair  : $ADMIN_KEYPAIR  (vault admin)"
 log "agent keypair  : $AGENT_KEYPAIR"
 
 # ─── Step 1: preflight ─────────────────────────────────────────────────────
-hdr "1/9 preflight"
+hdr "1/10 preflight"
 if bash scripts/preflight.sh >>"$LOG_FILE" 2>&1; then
   ok "preflight passed"
 else
@@ -119,7 +120,7 @@ else
 fi
 
 # ─── Step 2: anchor build + deploy (idempotent) ────────────────────────────
-hdr "2/9 anchor build + deploy"
+hdr "2/10 anchor build + deploy"
 PROGRAM_ON_CHAIN=0
 if solana --url "$RPC_URL" account "$PROGRAM_ID" >/dev/null 2>&1; then
   PROGRAM_ON_CHAIN=1
@@ -135,7 +136,7 @@ else
 fi
 
 # ─── Step 3: init-mxe (idempotent) ────────────────────────────────────────
-hdr "3/9 Arcium MXE registration"
+hdr "3/10 Arcium MXE registration"
 MXE_EXISTS=0
 if solana --url "$RPC_URL" account "$MXE_PUBKEY" >/dev/null 2>&1; then
   MXE_EXISTS=1
@@ -152,7 +153,7 @@ else
 fi
 
 # ─── Step 4: ensure admin + agent keypairs ────────────────────────────────
-hdr "4/9 vault admin + agent keypairs"
+hdr "4/10 vault admin + agent keypairs"
 if [[ ! -f "$ADMIN_KEYPAIR" ]]; then
   log "generating vault admin keypair at $ADMIN_KEYPAIR"
   solana-keygen new --no-bip39-passphrase --silent --outfile "$ADMIN_KEYPAIR" >>"$LOG_FILE" 2>&1
@@ -196,7 +197,7 @@ ok "vault admin    : $ADMIN_PK"
 ok "agent          : $AGENT_PK"
 
 # ─── Step 5: initialize_vault (idempotent) ────────────────────────────────
-hdr "5/9 initialize_vault"
+hdr "5/10 initialize_vault"
 ANCHOR_WALLET="$ADMIN_KEYPAIR" AGENT_KEYPAIR_PATH="$AGENT_KEYPAIR" \
   pnpm exec ts-node --transpile-only scripts/initialize_vault.ts 2>&1 | tee -a "$LOG_FILE" \
   || { err "initialize_vault failed"; exit 1; }
@@ -225,15 +226,26 @@ FE_ENV="$ROOT/frontend/.env.local"
 ok "wrote $FE_ENV (vault admin = ${ADMIN_PUBKEY:-$ADMIN_PK})"
 
 # ─── Step 6: seed demo funds ──────────────────────────────────────────────
-hdr "6/9 seed demo funds (10 USDC + 0.1 SOL)"
+hdr "6/10 seed demo funds (10 USDC + 0.1 SOL)"
 if ANCHOR_WALLET="$ADMIN_KEYPAIR" pnpm exec ts-node --transpile-only scripts/seed_demo_funds.ts 2>&1 | tee -a "$LOG_FILE"; then
   ok "demo deposits complete"
 else
   warn "seed step had issues (see $LOG_FILE) — continuing so the demo can still surface vault state"
 fi
 
-# ─── Step 7: start agent (MOCK_MPC=true) ──────────────────────────────────
-hdr "7/9 trading agent"
+# ─── Step 7: register Raydium CPMM pool (idempotent) ──────────────────────
+hdr "7/10 Raydium CPMM pool registration"
+if ANCHOR_WALLET="$DEPLOY_KEYPAIR" pnpm exec ts-node --transpile-only scripts/create_raydium_pool.ts 2>&1 | tee -a "$LOG_FILE"; then
+  ok "Raydium pool wired in .env (RAYDIUM_USDC_SOL_POOL)"
+  # Reload .env so subsequent steps see the freshly-written RAYDIUM_* vars.
+  set -a; source .env; set +a
+else
+  err "Raydium pool registration failed — agent will not be able to swap"
+  warn "continuing (vault deposit/withdraw still works) — see $LOG_FILE"
+fi
+
+# ─── Step 8: start agent (MOCK_MPC=true) ──────────────────────────────────
+hdr "8/10 trading agent"
 if [[ $START_AGENT -eq 1 ]]; then
   AGENT_LOG="$LOG_DIR/agent_${RUN_TS}.log"
   log "starting agent → $AGENT_LOG"
@@ -245,8 +257,8 @@ else
   warn "skipped (--no-agent)"
 fi
 
-# ─── Step 8: start frontend ───────────────────────────────────────────────
-hdr "8/9 frontend"
+# ─── Step 9: start frontend ───────────────────────────────────────────────
+hdr "9/10 frontend"
 if [[ $START_FE -eq 1 ]]; then
   FE_LOG="$LOG_DIR/frontend_${RUN_TS}.log"
   FE_PORT="${FE_PORT:-3000}"
@@ -259,8 +271,8 @@ else
   warn "skipped (--no-fe)"
 fi
 
-# ─── Step 9: summary ──────────────────────────────────────────────────────
-hdr "9/9 demo summary"
+# ─── Step 10: summary ─────────────────────────────────────────────────────
+hdr "10/10 demo summary"
 VAULT_PK="${VAULT_PUBKEY:-?}"
 SHARE_MINT_PK="${SHARE_MINT_PUBKEY:-?}"
 log ""

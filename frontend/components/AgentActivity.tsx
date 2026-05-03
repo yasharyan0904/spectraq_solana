@@ -109,7 +109,7 @@ function describe(e: AgentEvent): string {
       return `Skipped tick — ${e.reason ?? "guard"}`;
     case "error":
       return e.reason === "trade-failed"
-        ? "Trade failed (expected on devnet — Jupiter routes mainnet only)"
+        ? "Trade failed (Raydium CPMM swap rejected)"
         : "Error";
     case "info":
       return e.msg;

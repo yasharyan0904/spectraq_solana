@@ -40,16 +40,16 @@ pub enum VaultError {
     PythReadError,
     #[msg("Pyth price confidence interval exceeds 1% of price")]
     PriceConfidenceTooWide,
-    #[msg("Jupiter swap destination ATA does not equal the vault's own ATA")]
+    #[msg("DEX swap destination ATA does not equal the vault's own ATA")]
     InvalidSwapDestination,
     #[msg("min_amount_out is below the oracle-derived slippage floor (5%)")]
     SlippageExceeded,
-    #[msg("Jupiter v6 CPI failed (route invalid, insufficient liquidity, etc.)")]
-    JupiterCpiFailed,
+    #[msg("DEX swap CPI failed (pool empty, route invalid, slippage breached, etc.)")]
+    DexCpiFailed,
     #[msg("destination_ata_index is out of bounds for remaining_accounts")]
     InvalidDestinationIndex,
-    #[msg("Jupiter program account does not match JUPITER_V6_PROGRAM_ID")]
-    InvalidJupiterProgram,
+    #[msg("DEX program account does not match the configured CPMM program id")]
+    InvalidDexProgram,
     #[msg("Vault did not receive the expected output token amount post-swap")]
     SwapOutputBelowMinimum,
 }

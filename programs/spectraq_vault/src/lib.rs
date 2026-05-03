@@ -126,7 +126,7 @@ pub mod spectraq_vault {
         direction: TradeDirection,
         amount: u64,
         min_amount_out: u64,
-        jupiter_route_data: Vec<u8>,
+        dex_route_data: Vec<u8>,
         destination_ata_index: u8,
     ) -> Result<()> {
         instructions::execute_trade::execute_trade_handler(
@@ -134,7 +134,7 @@ pub mod spectraq_vault {
             direction,
             amount,
             min_amount_out,
-            jupiter_route_data,
+            dex_route_data,
             destination_ata_index,
         )
     }

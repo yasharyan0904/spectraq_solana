@@ -1,7 +1,7 @@
 // Vitest unit tests for the agent's pure modules.
 // Network-touching code paths (priceFeed.getRecentPrices, arcium.requestSignal,
 // trader.executeTrade) are exercised by the integration tests in
-// `tests/02_arcium.ts` / `tests/04_jupiter.ts`. Here we verify only the
+// `tests/02_arcium.ts` / `tests/04_raydium.ts`. Here we verify only the
 // deterministic logic — signal computation, decideTrade no-churn, and
 // kill-switch / NAV-floor / window validation guards.
 

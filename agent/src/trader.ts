@@ -2,7 +2,7 @@
 //
 //   decideTrade  : pure function. Returns null when the signal already
 //                  matches the current vault position (no-churn).
-//   executeTrade : Jupiter quote → swap-instructions → execute_trade CPI.
+//   executeTrade : Raydium CPMM quote → swap ix → execute_trade CPI.
 //                  Wraps everything in exponential-backoff retries with a
 //                  3-attempt circuit-breaker; raises a typed error on
 //                  permanent failure so the main loop can warn-and-skip.
@@ -32,7 +32,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import anchor from "@coral-xyz/anchor";
-import { quoteAndBuildSwap } from "./jupiter.js";
+import { quoteAndBuildSwap, type RaydiumPoolConfig } from "./raydium.js";
 import type { Signal } from "./arcium.js";
 
 const { BN } = anchor;
@@ -44,8 +44,9 @@ export interface TradeAction {
   direction: { usdcToSol: {} } | { solToUsdc: {} };
   /** Atomic units (e6 USDC or lamports). */
   amountIn: bigint;
-  /** Slippage bps the vault enforces; we still send the Jupiter quote with
-   * a slightly looser bound so it can route through low-liquidity pools. */
+  /** Slippage bps the agent applies to the off-chain CPMM quote when
+   * computing min_amount_out. The on-chain Pyth slippage cap is the
+   * ultimate safety net (5%). */
   slippageBps: number;
   /** Human label for logs. */
   label: string;
@@ -59,7 +60,8 @@ export interface TraderDeps {
   usdcMint: PublicKey;
   wsolMint: PublicKey;
   pythSolUsdFeed: PublicKey;
-  jupiterProgramId: PublicKey;
+  /** Raydium CPMM pool the agent routes every swap through. */
+  raydiumPool: RaydiumPoolConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +91,11 @@ export function decideTrade(
 ): TradeAction | null {
   if (signal === -1) return null; // Mode 1 long-only
 
-  const slippageBps = opts.slippageBps ?? 50;
+  // Devnet Raydium CPMM has thin reserves so the CurveCalculator quote can
+  // overshoot the actual on-chain delivery by several percent. The agent's
+  // off-chain slippage tolerance is widened accordingly; the on-chain Pyth
+  // floor (5% from oracle-implied output) remains the real safety net.
+  const slippageBps = opts.slippageBps ?? 800;
   const thirty = (x: bigint) => (x * 3000n) / 10_000n;
 
   if (signal === 1 && position === "usdc") {
@@ -146,11 +152,14 @@ export async function readVaultBalances(
 
   // Crude "is the vault mostly USDC vs SOL" classifier. Convert SOL to
   // USDC at a flat $100 reference (exact value doesn't matter — we only
-  // need a coarse split/usdc/sol classifier).
-  const solInUsdcRef = (solLamports * 100n) / 1_000_000_000n; // 100 USD/SOL
+  // need a coarse split/usdc/sol classifier). Both sides expressed in e6
+  // USDC units so the comparison is apples-to-apples.
+  // solInUsdcE6 = solLamports * 100 USD/SOL * 1e6 e6/USD / 1e9 lamports/SOL
+  //             = solLamports / 10
+  const solInUsdcE6Ref = solLamports / 10n;
   let position: Position;
-  if (usdcE6 > solInUsdcRef * 10n) position = "usdc";
-  else if (solInUsdcRef > usdcE6 * 10n) position = "sol";
+  if (usdcE6 > solInUsdcE6Ref * 10n) position = "usdc";
+  else if (solInUsdcE6Ref > usdcE6 * 10n) position = "sol";
   else position = "split";
 
   return { usdcE6, solLamports, position };
@@ -199,8 +208,10 @@ export async function executeTrade(
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      // Re-quote on each retry — Jupiter routes are time-sensitive.
+      // Re-quote on each retry — pool reserves shift between ticks.
       const route = await quoteAndBuildSwap({
+        connection: deps.connection,
+        pool: deps.raydiumPool,
         inputMint,
         outputMint,
         amount: action.amountIn,
@@ -219,7 +230,7 @@ export async function executeTrade(
           action.direction,
           new BN(action.amountIn.toString()),
           new BN(minAmountOut.toString()),
-          Buffer.from(route.jupiterRouteData),
+          Buffer.from(route.dexRouteData),
           route.destinationAtaIndex,
         )
         .accounts({
@@ -230,7 +241,7 @@ export async function executeTrade(
           usdcVault: getAssociatedTokenAddressSync(deps.usdcMint, deps.vaultPda, true),
           solVault: getAssociatedTokenAddressSync(deps.wsolMint, deps.vaultPda, true),
           priceUpdate: deps.pythSolUsdFeed,
-          jupiterProgram: deps.jupiterProgramId,
+          dexProgram: deps.raydiumPool.programId,
         })
         .remainingAccounts(
           route.remainingAccounts.map((m) => ({
@@ -240,7 +251,7 @@ export async function executeTrade(
           })),
         )
         .signers([deps.agent])
-        .rpc({ skipPreflight: true, commitment: "confirmed" });
+        .rpc({ skipPreflight: false, commitment: "confirmed" });
 
       // Compute realized out from the post-tx vault balances. Cheaper than
       // parsing Anchor logs and works in either direction.

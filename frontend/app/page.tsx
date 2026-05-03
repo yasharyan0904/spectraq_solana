@@ -22,7 +22,7 @@ export default function LandingPage() {
           <div className="grid grid-cols-12 gap-8">
             <div className="col-span-12 md:col-span-8">
               <p className="mono text-xs uppercase tracking-[0.2em] text-[var(--color-brand)]">
-                Solana · Arcium MPC · Pyth · Jupiter
+                Solana · Arcium MPC · Pyth · Raydium CPMM
               </p>
               <h1 className="mt-5 text-4xl font-medium leading-[1.1] tracking-tight text-[var(--color-text)] md:text-6xl">
                 Trustless asset allocation.
@@ -99,7 +99,7 @@ arcium  cluster
 vault.signal_state = Ready
    ↓
 agent.execute_trade()
-   ↓  (Jupiter v6 SOL ↔ USDC swap)
+   ↓  (Raydium CPMM SOL ↔ USDC swap)
 on-chain TradeExecuted event`}
               </code>
             </div>

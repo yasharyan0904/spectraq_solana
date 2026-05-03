@@ -85,10 +85,6 @@ export interface AgentConfig {
   navFloorBps: number;
   logLevel: string;
 
-  // Jupiter
-  jupiterProgramId: PublicKey;
-  jupiterQuoteApi: string;
-  jupiterSwapInstructionsApi: string;
 }
 
 const SOL_USD_FEED_ID_HEX_DEFAULT =
@@ -151,19 +147,6 @@ export function loadConfig(): AgentConfig {
     maxDailyTrades: asInt(optional("MAX_DAILY_TRADES", "24"), "MAX_DAILY_TRADES"),
     navFloorBps: asInt(optional("NAV_FLOOR_BPS", "5000"), "NAV_FLOOR_BPS"),
     logLevel: optional("LOG_LEVEL", "info"),
-    jupiterProgramId: new PublicKey(
-      optional("JUPITER_PROGRAM_ID", "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
-    ),
-    // Jupiter retired the public v6 host — Pro/Station with x-api-key is the
-    // only live surface. JUPITER_API_KEY is required for routes to resolve.
-    jupiterQuoteApi: optional(
-      "JUPITER_QUOTE_API",
-      "https://api.jup.ag/swap/v1/quote",
-    ),
-    jupiterSwapInstructionsApi: optional(
-      "JUPITER_SWAP_INSTRUCTIONS_API",
-      "https://api.jup.ag/swap/v1/swap-instructions",
-    ),
   };
 }
 
@@ -178,6 +161,5 @@ export const redactKeys: string[] = [
   "*.secretKey",
   "*.privateKey",
   "*.keypair",
-  "JUPITER_API_KEY",
   "HELIUS_API_KEY",
 ];

@@ -72,16 +72,20 @@ export async function GET(req: Request) {
           const e = evt as { name?: string; data?: Record<string, unknown> };
           if (e.name !== "tradeExecuted" && e.name !== "TradeExecuted") continue;
           const d = (e.data ?? {}) as Record<string, { toString(): string } | boolean | undefined>;
+          // Anchor's BorshEventCoder may return snake_case OR camelCase
+          // depending on the IDL spec version — accept both.
+          const pick = (camel: string, snake: string) =>
+            (d[camel] ?? d[snake]) as { toString(): string } | undefined;
           trades.push({
             signature: s.signature,
             blockTime: s.blockTime,
             directionIsUsdcToSol: Boolean(d.directionIsUsdcToSol ?? d.direction_is_usdc_to_sol),
-            amountIn: (d.amountIn as { toString(): string } | undefined)?.toString() ?? "0",
-            amountOut: (d.amountOut as { toString(): string } | undefined)?.toString() ?? "0",
+            amountIn: pick("amountIn", "amount_in")?.toString() ?? "0",
+            amountOut: pick("amountOut", "amount_out")?.toString() ?? "0",
             usdcBalanceAfter:
-              (d.usdcBalanceAfter as { toString(): string } | undefined)?.toString() ?? "0",
+              pick("usdcBalanceAfter", "usdc_balance_after")?.toString() ?? "0",
             solBalanceAfter:
-              (d.solBalanceAfter as { toString(): string } | undefined)?.toString() ?? "0",
+              pick("solBalanceAfter", "sol_balance_after")?.toString() ?? "0",
           });
           break;
         }

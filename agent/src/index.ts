@@ -49,6 +49,7 @@ import {
   readVaultBalances,
   type TraderDeps,
 } from "./trader.js";
+import { loadRaydiumPoolFromEnv } from "./raydium.js";
 import {
   DailyTradeKillSwitch,
   NavFloorGuard,
@@ -241,7 +242,26 @@ async function runOneTick(ctx: TickContext): Promise<void> {
         );
       } catch (e) {
         errorsTotal.inc();
-        tickLog.error({ err: String(e) }, "trade failed (ignored)");
+        const cause = (e as { cause?: unknown })?.cause;
+        let causeStr: string;
+        if (!cause) {
+          causeStr = "(no cause)";
+        } else {
+          const msg =
+            cause instanceof Error
+              ? cause.message
+              : typeof cause === "object"
+                ? JSON.stringify(cause)
+                : String(cause);
+          const logs = JSON.stringify(
+            (cause as { logs?: string[] })?.logs ?? [],
+          );
+          causeStr = `${msg} | logs=${logs}`;
+        }
+        tickLog.error(
+          { err: String(e), cause: causeStr },
+          "trade failed (ignored)",
+        );
       }
     }
 
@@ -323,6 +343,14 @@ async function main(): Promise<void> {
       thresholdBps: cfg.strategyThresholdBps,
     },
   };
+  const raydiumPool = loadRaydiumPoolFromEnv();
+  log.info(
+    {
+      poolId: raydiumPool.poolId.toBase58(),
+      cpmmProgram: raydiumPool.programId.toBase58(),
+    },
+    "raydium CPMM pool wired",
+  );
   const trader: TraderDeps = {
     program,
     connection,
@@ -331,7 +359,7 @@ async function main(): Promise<void> {
     usdcMint: cfg.usdcMint,
     wsolMint: cfg.wsolMint,
     pythSolUsdFeed: cfg.pythSolUsdFeed,
-    jupiterProgramId: cfg.jupiterProgramId,
+    raydiumPool,
   };
   const killSwitch = new DailyTradeKillSwitch(cfg.maxDailyTrades);
   const navGuard = new NavFloorGuard(

@@ -11,7 +11,7 @@ and the current status of each item against the prompt-9 audit checklist.
 
 | ✓ | Item                                                           | Where it's enforced |
 |---|----------------------------------------------------------------|---------------------|
-| ✅ | No instruction transfers funds to non-vault, non-depositor     | `instructions/withdraw.rs` (depositor-only path) and `instructions/execute_trade.rs:151-168` (Jupiter destination check) |
+| ✅ | No instruction transfers funds to non-vault, non-depositor     | `instructions/withdraw.rs` (depositor-only path) and `instructions/execute_trade.rs:151-168` (DEX destination ATA pinned to vault's own ATA) |
 | ✅ | All math is checked                                            | `checked_mul` / `checked_add` / `checked_sub` are the only arithmetic ops in `instructions/{deposit_*,withdraw,execute_trade}.rs` and `oracle.rs` |
 | ✅ | Agent key is logically separated from admin key                | `instructions/initialize_vault.rs:66-70` (`require_keys_neq!` returns `AgentEqualsAdmin`) |
 | ✅ | Pyth staleness validated on every read                         | `oracle.rs::DEFAULT_MAX_AGE_SECONDS = 60` plus `get_price_no_older_than` calls in `oracle.rs::get_price_e6`, used by `deposit_sol.rs` and `execute_trade.rs:122-127` |
@@ -43,7 +43,8 @@ and the current status of each item against the prompt-9 audit checklist.
   exposes these).
 - Send funds to its own wallet or any non-vault ATA — `execute_trade` checks
   `expected_dest = ATA(vault, dest_mint)` against the supplied destination
-  account before invoking Jupiter.
+  account before invoking the DEX program (Raydium CPMM, address-pinned via
+  `RAYDIUM_CPMM_PROGRAM_ID`).
 - Bypass the Pyth oracle — the swap floor is computed inside the vault
   program from a fresh `PriceUpdateV2` whose feed id must match
   `vault_state.sol_usd_feed_id`.
@@ -53,8 +54,8 @@ and the current status of each item against the prompt-9 audit checklist.
 ### What an attacker who steals the agent key CAN do
 
 Worst case: drain the vault by repeatedly calling `execute_trade` with
-unfavorable Jupiter routes, losing up to ~5% per trade × 30% NAV per call
-× the swap latency of devnet. Withdrawal is still available throughout, so
+unfavorable Raydium CPMM routes, losing up to ~5% per trade × 30% NAV per
+call × the swap latency of devnet. Withdrawal is still available throughout, so
 honest depositors can exit. The recovery procedure is to call
 `set_agent` (Mode 2 work) or, in the current build, deploy a hotfix that
 reads a new agent pubkey from a fresh `initialize_vault` on a

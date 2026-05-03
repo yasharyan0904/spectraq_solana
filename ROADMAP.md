@@ -49,7 +49,8 @@ Pre-mainnet checklist:
    gateway (Arweave or Shadow Drive), pin the hash in Anchor.toml.
 3. External audit of the swap path and `execute_trade` invariants.
 4. Mainnet integration tests: full vault lifecycle against
-   pyth-mainnet + jupiter-mainnet on a private cluster, not just devnet.
+   pyth-mainnet + a mainnet DEX (Raydium CPMM and/or re-enabled Jupiter
+   aggregation) on a private cluster, not just devnet.
 5. Switch RPC to a dedicated Helius pool (separate API key per env).
 6. Raise per-trade caps from 30% → configurable (5%–50%) via a governed
    `set_caps` instruction (admin-signed, time-locked).

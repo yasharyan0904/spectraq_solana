@@ -14,7 +14,11 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
-default = []
+# `mock-mpc` is on by default for the hackathon devnet build so the IDL
+# exposes `mock_callback_signal` (admin-or-agent gated) and the agent's
+# MOCK_MPC=true demo path can stamp signals when Arcium devnet is flaky.
+# Strip it for production: `default = []` then `cargo build --no-default-features`.
+default = ["mock-mpc"]
 # Demo safety net: enables admin-only `mock_callback_signal` for the hackathon
 # fallback path when the Arcium MPC cluster is unreachable.
 mock-mpc = []

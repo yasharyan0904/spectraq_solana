@@ -772,10 +772,12 @@
           ]
         },
         {
-          "name": "jupiter_program",
+          "name": "dex_program",
           "docs": [
-            "Jupiter v6 program. Address-pinned to `JUPITER_V6_PROGRAM_ID`."
-          ]
+            "Raydium CPMM program (devnet). Address-pinned to",
+            "`RAYDIUM_CPMM_PROGRAM_ID`."
+          ],
+          "address": "DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb"
         },
         {
           "name": "token_program",
@@ -804,7 +806,7 @@
           "type": "u64"
         },
         {
-          "name": "jupiter_route_data",
+          "name": "dex_route_data",
           "type": "bytes"
         },
         {
@@ -1878,7 +1880,7 @@
     {
       "code": 6019,
       "name": "InvalidSwapDestination",
-      "msg": "Jupiter swap destination ATA does not equal the vault's own ATA"
+      "msg": "DEX swap destination ATA does not equal the vault's own ATA"
     },
     {
       "code": 6020,
@@ -1887,8 +1889,8 @@
     },
     {
       "code": 6021,
-      "name": "JupiterCpiFailed",
-      "msg": "Jupiter v6 CPI failed (route invalid, insufficient liquidity, etc.)"
+      "name": "DexCpiFailed",
+      "msg": "DEX swap CPI failed (pool empty, route invalid, slippage breached, etc.)"
     },
     {
       "code": 6022,
@@ -1897,8 +1899,8 @@
     },
     {
       "code": 6023,
-      "name": "InvalidJupiterProgram",
-      "msg": "Jupiter program account does not match JUPITER_V6_PROGRAM_ID"
+      "name": "InvalidDexProgram",
+      "msg": "DEX program account does not match the configured CPMM program id"
     },
     {
       "code": 6024,
@@ -3277,16 +3279,6 @@
       "value": "10000"
     },
     {
-      "name": "JUPITER_V6_PROGRAM_ID",
-      "docs": [
-        "Jupiter v6 program id. Vault's `execute_trade` validates the",
-        "`jupiter_program` account passed in matches this constant before",
-        "invoke_signed-ing the swap."
-      ],
-      "type": "pubkey",
-      "value": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
-    },
-    {
       "name": "MAX_SLIPPAGE_BPS",
       "docs": [
         "Maximum allowed slippage versus the Pyth-derived expected output, in bps.",
@@ -3308,6 +3300,18 @@
       "name": "POSITION_SEED",
       "type": "bytes",
       "value": "[112, 111, 115, 105, 116, 105, 111, 110]"
+    },
+    {
+      "name": "RAYDIUM_CPMM_PROGRAM_ID",
+      "docs": [
+        "Raydium CPMM (Constant Product MM) program id on Solana devnet. Vault's",
+        "`execute_trade` validates the `dex_program` account passed in matches",
+        "this constant before invoke_signed-ing the swap. Switched from Jupiter",
+        "v6 (devnet has no aggregator liquidity for our USDC mint) to a",
+        "dedicated Raydium CPMM pool we register at boot."
+      ],
+      "type": "pubkey",
+      "value": "DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb"
     },
     {
       "name": "SHARE_MINT_SEED",

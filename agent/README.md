@@ -3,7 +3,8 @@
 Off-chain TypeScript orchestrator for the SpectraQ vault. Every
 `TICK_INTERVAL_SEC` it pulls a 50-tick SOL/USDC window, computes (or
 requests) an MA-crossover signal, decides whether to trade, executes
-through Jupiter, and runs `settle_pnl`.
+through the registered Raydium CPMM USDC↔wSOL pool, and runs
+`settle_pnl`.
 
 ```
 priceFeed → arcium → trader → execute_trade → settle_pnl → metrics
@@ -91,28 +92,28 @@ Each tick reads the on-chain `PriceUpdateV2.publish_time` directly
 than `PYTH_MAX_AGE_SECONDS`. Defaults to 60 s, matching the on-chain cap
 in `oracle::DEFAULT_MAX_AGE_SECONDS`.
 
-## Jupiter happy path: mainnet fork
+## Raydium CPMM happy path: devnet pool
 
-Jupiter v6 has no liquid USDC↔SOL pools on devnet. To exercise a real
-swap end-to-end:
+The agent routes every USDC↔wSOL swap through a single registered
+Raydium CPMM pool. `scripts/create_raydium_pool.ts` provisions one
+(idempotent — reuses any existing devnet pool that matches the mint
+pair) and writes `RAYDIUM_POOL_ID` / `RAYDIUM_POOL_*` into the workspace
+`.env`. Once those are set, `pnpm --filter agent start` swaps against
+that pool directly.
+
+To exercise the end-to-end loop:
 
 ```bash
-solana-test-validator --reset \
-  --clone-upgradeable-program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 \
-  --url mainnet-beta
-
-# In another shell:
-ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 \
-HELIUS_RPC_URL=http://127.0.0.1:8899 \
-  pnpm --filter agent start
+pnpm exec ts-node --transpile-only scripts/create_raydium_pool.ts
+MOCK_MPC=true pnpm --filter agent start
 ```
 
 ## Logging & secrets
 
 Logs are emitted via `pino` with a redaction list (`config.redactKeys`).
 The `agentKeypair` and `adminKeypair` fields are never serialized; the
-`HELIUS_API_KEY` and `JUPITER_API_KEY` environment values are not logged
-either. **Never** edit code to log a `Keypair` directly.
+`HELIUS_API_KEY` env value is not logged either. **Never** edit code to
+log a `Keypair` directly.
 
 ## Metrics
 

@@ -16,16 +16,20 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "0.32.1",
-    "@solana/web3.js": "1.95.4",
-    "@solana/spl-token": "0.4.8",
     "@arcium-hq/client": "*",
+    "@coral-xyz/anchor": "0.32.1",
+    "@raydium-io/raydium-sdk-v2": "0.2.41-alpha",
+    "@solana/spl-token": "0.4.8",
+    "@solana/web3.js": "1.95.4",
     "axios": "1.7.7",
+    "bn.js": "^5.2.3",
+    "decimal.js": "^10.6.0",
     "dotenv": "16.4.5",
     "pino": "9.4.0",
     "pino-pretty": "11.2.2"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.2.0",
     "@types/node": "20.14.10",
     "tsx": "4.19.0",
     "typescript": "5.5.4",

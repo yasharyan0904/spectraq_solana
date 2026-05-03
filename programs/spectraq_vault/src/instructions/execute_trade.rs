@@ -1,5 +1,12 @@
-// `execute_trade` — agent submits a Jupiter v6 route to swap USDC↔SOL on
-// behalf of the vault PDA after the MA crossover signal turns Ready.
+// `execute_trade` — agent submits a Raydium CPMM swap route to rotate the
+// vault between USDC and wSOL after the MA crossover signal turns Ready.
+//
+// We previously routed through Jupiter v6, but Jupiter's aggregator does
+// not index liquidity for the devnet USDC mint, so the live demo never
+// landed a real swap. Raydium CPMM lets us point at a specific pool we
+// register at boot (RAYDIUM_USDC_SOL_POOL) which has real on-chain depth.
+// The vault stays DEX-agnostic — invariants below are checked irrespective
+// of which DEX program the route bytes target.
 //
 // Trust model:
 //   1. Agent authorizes the call (signer == vault.agent).
@@ -13,7 +20,7 @@
 //      and requires it equal the vault's own ATA for the OUTPUT mint.
 //      Without this, a malicious agent could route the swap to its own ATA.
 //   6. Realized check: vault output-ATA balance must increase by ≥
-//      min_amount_out post-CPI. If Jupiter "succeeds" but routes the funds
+//      min_amount_out post-CPI. If the DEX "succeeds" but routes the funds
 //      elsewhere (it shouldn't, given check #5, but belt + braces) we fail.
 //   7. Each trade consumes the signal — `signal_state` flips back to Idle.
 
@@ -60,10 +67,11 @@ pub struct ExecuteTrade<'info> {
     /// `min_amount_out` must be ≥ 95 % of the oracle-derived expected output.
     pub price_update: Box<Account<'info, PriceUpdateV2>>,
 
-    /// Jupiter v6 program. Address-pinned to `JUPITER_V6_PROGRAM_ID`.
+    /// Raydium CPMM program (devnet). Address-pinned to
+    /// `RAYDIUM_CPMM_PROGRAM_ID`.
     /// CHECK: program id is the validation; no Anchor type for it.
-    #[account(address = JUPITER_V6_PROGRAM_ID @ VaultError::InvalidJupiterProgram)]
-    pub jupiter_program: AccountInfo<'info>,
+    #[account(address = RAYDIUM_CPMM_PROGRAM_ID @ VaultError::InvalidDexProgram)]
+    pub dex_program: AccountInfo<'info>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -74,7 +82,7 @@ pub fn execute_trade_handler(
     direction: TradeDirection,
     amount: u64,
     min_amount_out: u64,
-    jupiter_route_data: Vec<u8>,
+    dex_route_data: Vec<u8>,
     destination_ata_index: u8,
 ) -> Result<()> {
     require!(amount > 0, VaultError::ZeroAmount);
@@ -175,29 +183,37 @@ pub fn execute_trade_handler(
     };
     let _ = source_ata_key; // referenced only for documentation symmetry
 
-    // ----- 4. Build & invoke the Jupiter CPI ------------------------------
-    // Reconstruct AccountMeta from each AccountInfo's flags. Jupiter's
-    // route-instruction encoding sets the per-account flags expected by the
-    // program (incl. marking the vault PDA as a signer where needed).
+    // ----- 4. Build & invoke the DEX CPI ----------------------------------
+    // Reconstruct AccountMeta from each AccountInfo's flags. The agent
+    // pre-builds the swap ix off-chain via Raydium SDK V2 and passes the
+    // raw bytes + accounts through. We sign as the vault PDA via
+    // invoke_signed, since the swap targets the vault's own ATAs.
+    // The agent passes the vault PDA in remaining_accounts with
+    // is_signer=false (so the outer tx doesn't require its signature —
+    // PDAs cannot sign at the tx level). Inside the inner CPI we flip the
+    // signer flag back on for the vault PDA only, so invoke_signed can
+    // satisfy it via the vault seeds. Every other account passes through
+    // unchanged.
+    let vault_key = ctx.accounts.vault_state.key();
     let ix_accounts: Vec<AccountMeta> = ctx
         .remaining_accounts
         .iter()
         .map(|a| AccountMeta {
             pubkey: *a.key,
-            is_signer: a.is_signer,
+            is_signer: a.is_signer || *a.key == vault_key,
             is_writable: a.is_writable,
         })
         .collect();
     let ix = Instruction {
-        program_id: ctx.accounts.jupiter_program.key(),
+        program_id: ctx.accounts.dex_program.key(),
         accounts: ix_accounts,
-        data: jupiter_route_data,
+        data: dex_route_data,
     };
     let admin_key = ctx.accounts.vault_state.admin;
     let bump = ctx.accounts.vault_state.bump;
     let signer_seeds: &[&[&[u8]]] = &[&[VAULT_SEED, admin_key.as_ref(), &[bump]]];
     invoke_signed(&ix, ctx.remaining_accounts, signer_seeds)
-        .map_err(|_| VaultError::JupiterCpiFailed)?;
+        .map_err(|_| VaultError::DexCpiFailed)?;
 
     // ----- 5. Verify realized output --------------------------------------
     // Reload the destination token account to read post-swap balance.

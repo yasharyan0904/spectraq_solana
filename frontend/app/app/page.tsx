@@ -6,6 +6,7 @@ import { AgentActivity } from "@/components/AgentActivity";
 import { Card, Stat } from "@/components/Card";
 import { NavChart } from "@/components/NavChart";
 import { PositionBreakdown } from "@/components/PositionBreakdown";
+import { RaydiumPoolCard } from "@/components/RaydiumPoolCard";
 import { SignalPanel } from "@/components/SignalPanel";
 import { TradesTable } from "@/components/TradesTable";
 import { formatSol, formatUsdc } from "@/lib/format";
@@ -91,10 +92,13 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Pool depth for the AMM the agent routes through */}
+      <RaydiumPoolCard />
+
       {/* Live agent activity */}
       <AgentActivity filter="trades" limit={30} />
 
-      {/* On-chain trade events (lands when Jupiter routes — mainnet) */}
+      {/* On-chain TradeExecuted events landed via Raydium CPMM */}
       <TradesTable />
     </div>
   );

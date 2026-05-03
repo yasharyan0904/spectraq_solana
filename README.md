@@ -8,9 +8,10 @@ or SOL into a program-owned vault and receive proportional SPL share tokens
 window, and submits it to an Arcium MPC circuit that computes a
 moving-average crossover signal. The threshold-decrypted signal returns to
 the vault via callback. The agent then executes a USDC↔SOL swap through
-Jupiter (Pro/Station endpoint, `api.jup.ag/swap/v1`) — but the vault
-program structurally validates that swap proceeds land in the vault's own
-ATA, and never anywhere else.
+**Raydium CPMM** (a single registered devnet pool) — but the vault program
+is DEX-agnostic: it validates the program ID, the destination ATA, the
+Pyth-derived slippage floor, and the realized output, regardless of which
+AMM produces the route bytes.
 
 **Withdrawal is always available** regardless of agent state, signal state,
 or pending MPC computations.
@@ -43,8 +44,9 @@ bash scripts/demo.sh                      # ⇒ open http://localhost:3000
 4. generate vault-admin + agent keypairs (separate from upgrade authority)
 5. `initialize_vault` — skipped if PDA exists
 6. seed demo funds: 10 USDC + 0.1 wSOL deposit
-7. write `frontend/.env.local` from `.env.demo` (so the dashboard derives
-   the correct vault PDA from the live admin pubkey, not a stale default)
+7. register a Raydium CPMM USDC↔wSOL pool (idempotent — reuses the
+   existing devnet pool if one matches the mint pair) and write the pool
+   addresses into `.env`
 8. start the agent (`MOCK_MPC=true` for reliable demo — Arcium devnet
    callbacks have multi-minute latency)
 9. start the Next.js frontend at `:3000`
@@ -77,8 +79,8 @@ Stop with `bash scripts/demo.sh --stop`. Live logs at `logs/demo_run_*.log`.
                  │ queue_comp      │ Pyth read    │ invoke_signed
                  ▼                 ▼              ▼
         ┌──────────────┐    ┌────────────┐   ┌────────────────┐
-        │   Arcium     │    │   Pyth     │   │  Jupiter v6    │
-        │   MXE        │    │ price      │   │  router        │
+        │   Arcium     │    │   Pyth     │   │  Raydium CPMM  │
+        │   MXE        │    │ price      │   │  pool          │
         │ (offset 456) │    │ feeds      │   │                │
         └──────┬───────┘    └────────────┘   └────────────────┘
                │ threshold-decrypted SignalOutput
@@ -86,7 +88,7 @@ Stop with `bash scripts/demo.sh --stop`. Live logs at `logs/demo_run_*.log`.
         ┌──────────────────────┐
         │    Off-chain agent   │   ── price feed ──▶ Pyth / Binance
         │    (TypeScript)      │   ── encrypt ─────▶ Arcium client
-        │  agent ≠ admin key   │   ── trade ───────▶ Jupiter API
+        │  agent ≠ admin key   │   ── trade ───────▶ Raydium CPMM
         └──────────────────────┘
 ```
 
@@ -106,11 +108,11 @@ Devnet artifacts:
 ## Non-custodial invariants
 
 These are enforced by the Anchor program; tests in `tests/01_vault.ts`
-through `tests/04_jupiter.ts` assert each one.
+through `tests/04_raydium.ts` assert each one.
 
 1. **No instruction transfers vault USDC/SOL to any address except**
-   (a) the original depositor on `withdraw`, or (b) the Jupiter program on
-   `execute_trade`, with `destination = vault's own ATA`.
+   (a) the original depositor on `withdraw`, or (b) the registered DEX
+   program on `execute_trade`, with `destination = vault's own ATA`.
    → `programs/spectraq_vault/src/instructions/execute_trade.rs:151-168`
    (computes `expected_dest = ATA(vault, dest_mint)`, rejects mismatches).
 2. **`agent ≠ admin` at init.**
@@ -173,15 +175,18 @@ jupyter lab notebooks/01_validate_ma_crossover.ipynb
 
 ## Known limitations
 
-- **Jupiter does not aggregate on devnet.** Jupiter retired the
-  unauthenticated `quote-api.jup.ag/v6` host; the only live surface is
-  `api.jup.ag/swap/v1/...` (auth via `x-api-key`). Even with a valid Pro
-  key, the devnet USDC mint
-  (`4zMMC9srt5Ri…ncDU`) returns `TOKEN_NOT_TRADABLE` because Jupiter
-  routes against mainnet liquidity only. On devnet the agent attempts the
-  swap and the call shows up in the Jupiter dashboard, but the trade fails
-  at the routing layer. Mainnet beta executes normally; see
-  `tests/04_jupiter.ts` for the retry pattern.
+- **Single-pool depth on devnet (Raydium CPMM).** Aggregators (Jupiter)
+  do not route against devnet liquidity, so SpectraQ ships against a single
+  registered Raydium CPMM USDC↔wSOL pool that the demo script provisions
+  (`scripts/create_raydium_pool.ts`). Trades clear at this pool's instantaneous
+  spot price subject to the program's 5% slippage guard. Mainnet beta will
+  re-introduce DEX aggregation through the same `execute_trade` interface
+  (the program validates the destination ATA + Pyth-bounded slippage
+  regardless of which AMM produces the route bytes). See
+  `tests/04_raydium.ts` for the swap fixture. The vault admin can top up
+  pool liquidity from the dashboard at `/app/pool` — the form wraps the
+  matching SOL into wSOL and submits a single `deposit_cpmm` instruction
+  to Raydium.
 - **Arcium devnet callback latency** — threshold-decrypted callbacks can
   take 60–180 s on the public devnet cluster, with occasional silent drops.
   `MOCK_MPC=true` (default in `scripts/demo.sh`) substitutes a deterministic

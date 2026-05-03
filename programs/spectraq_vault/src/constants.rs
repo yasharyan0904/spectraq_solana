@@ -25,17 +25,19 @@ pub const LAMPORTS_PER_SOL_U128: u128 = 1_000_000_000;
 pub const MIN_SOL_USDC_PRICE_E6: u64 = 10_000_000;
 pub const MAX_SOL_USDC_PRICE_E6: u64 = 1_000_000_000;
 
-/// Jupiter v6 program id. Vault's `execute_trade` validates the
-/// `jupiter_program` account passed in matches this constant before
-/// invoke_signed-ing the swap.
+/// Raydium CPMM (Constant Product MM) program id on Solana devnet. Vault's
+/// `execute_trade` validates the `dex_program` account passed in matches
+/// this constant before invoke_signed-ing the swap. Switched from Jupiter
+/// v6 (devnet has no aggregator liquidity for our USDC mint) to a
+/// dedicated Raydium CPMM pool we register at boot.
 #[constant]
-pub const JUPITER_V6_PROGRAM_ID: Pubkey =
+pub const RAYDIUM_CPMM_PROGRAM_ID: Pubkey =
     anchor_lang::prelude::Pubkey::new_from_array([
-        // base58: JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4
-        0x04, 0x79, 0xd5, 0x5b, 0xf2, 0x31, 0xc0, 0x6e,
-        0xee, 0x74, 0xc5, 0x6e, 0xce, 0x68, 0x15, 0x07,
-        0xfd, 0xb1, 0xb2, 0xde, 0xa3, 0xf4, 0x8e, 0x51,
-        0x02, 0xb1, 0xcd, 0xa2, 0x56, 0xbc, 0x13, 0x8f,
+        // base58: DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb (devnet)
+        0xb8, 0x98, 0x99, 0x79, 0x2d, 0xca, 0x52, 0x34,
+        0x79, 0x6f, 0xe7, 0x74, 0x62, 0xb0, 0x31, 0xdf,
+        0x46, 0x3f, 0x5f, 0xfe, 0xae, 0x36, 0x7c, 0x5c,
+        0x0f, 0xfb, 0x24, 0x6e, 0x1c, 0xb7, 0xce, 0x0c,
     ]);
 
 /// Maximum allowed slippage versus the Pyth-derived expected output, in bps.

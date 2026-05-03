@@ -20,23 +20,22 @@ import { assert } from "chai";
 import type { SpectraqVault } from "../target/types/spectraq_vault";
 
 // ============================================================================
-// 04_jupiter.ts — execute_trade pre-CPI validation tests.
+// 04_raydium.ts — execute_trade pre-CPI validation tests.
 //
 // What this file covers (pre-CPI guards in the vault program):
-//   - InvalidJupiterProgram: passing an arbitrary program id where the
-//     `jupiter_program` account is expected.
+//   - InvalidDexProgram: passing an arbitrary program id where the
+//     `dex_program` account is expected (must equal RAYDIUM_CPMM_PROGRAM_ID).
 //   - SignalDirectionMismatch: trade direction does not match `last_signal`.
 //   - TradeSizeExceeded: amount > 30 % of the *live* source ATA balance.
 //   - SlippageExceeded: min_amount_out below the Pyth-derived 5 % floor.
 //   - InvalidSwapDestination: destination_ata_index points at an account
 //     that is not the vault's own output-side ATA.
 //
-// What this file does NOT cover (would need mainnet-fork liquidity):
-//   - Happy-path Jupiter swap. Jupiter v6 has no devnet deployment with
-//     liquid USDC↔SOL pools, so a real CPI will always fail with no route.
-//     Run `solana-test-validator --clone JUP6...V4 --clone-upgradeable-program JUP6...V4 --url mainnet-beta`
-//     and re-run with `ANCHOR_PROVIDER_URL=http://localhost:8899` to exercise
-//     the full path. README.md documents the exact incantation.
+// What this file does NOT cover (live-pool dependent):
+//   - Happy-path Raydium CPMM swap against a registered pool. The pool is
+//     provisioned via `scripts/create_raydium_pool.ts` and exercised end-to-end
+//     by the agent in `scripts/demo.sh`. Reproducing it inside an Anchor test
+//     would require seeding pool reserves and minting LP — out of scope here.
 //
 // All tests here drive the program with a Ready signal (via mock_callback_signal)
 // and a real devnet Pyth price account. The CPI itself never lands — the
@@ -55,11 +54,12 @@ const SOL_USD_FEED_ID: number[] = Array.from(
 const SOL_USD_PRICE_PDA = new PublicKey(
   "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
 );
-const JUPITER_V6_PROGRAM_ID = new PublicKey(
-  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+// Raydium CPMM program ID on devnet — pinned by the vault program.
+const RAYDIUM_CPMM_PROGRAM_ID = new PublicKey(
+  "DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb",
 );
 
-describe("spectraq_vault — execute_trade Jupiter guards", function () {
+describe("spectraq_vault — execute_trade Raydium CPMM guards", function () {
   this.timeout(120_000);
 
   const provider = anchor.AnchorProvider.env();
@@ -83,8 +83,8 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
   let userPositionPda: PublicKey;
   let userShareAta: PublicKey;
 
-  // A throwaway program id that is definitely not the Jupiter v6 program.
-  const fakeJupiterProgram = Keypair.generate().publicKey;
+  // A throwaway program id that is definitely not the Raydium CPMM program.
+  const fakeDexProgram = Keypair.generate().publicKey;
 
   before(async () => {
     // Fund all roles.
@@ -174,9 +174,9 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
   });
 
   // -------------------------------------------------------------------------
-  // 1. Wrong Jupiter program → InvalidJupiterProgram.
+  // 1. Wrong DEX program → InvalidDexProgram.
   // -------------------------------------------------------------------------
-  it("rejects a non-Jupiter program in `jupiter_program`", async () => {
+  it("rejects a non-Raydium program in `dex_program`", async () => {
     let threw = false;
     try {
       await (program.methods as any)
@@ -195,15 +195,15 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
           usdcVault: usdcVaultAta,
           solVault: solVaultAta,
           priceUpdate: SOL_USD_PRICE_PDA,
-          jupiterProgram: fakeJupiterProgram,
+          dexProgram: fakeDexProgram,
         })
         .signers([agent])
         .rpc();
     } catch (e: any) {
       threw = true;
-      assert.match(String(e), /InvalidJupiterProgram|ConstraintAddress/);
+      assert.match(String(e), /InvalidDexProgram|ConstraintAddress/);
     }
-    assert.isTrue(threw, "expected InvalidJupiterProgram");
+    assert.isTrue(threw, "expected InvalidDexProgram");
   });
 
   // -------------------------------------------------------------------------
@@ -228,7 +228,7 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
           usdcVault: usdcVaultAta,
           solVault: solVaultAta,
           priceUpdate: SOL_USD_PRICE_PDA,
-          jupiterProgram: JUPITER_V6_PROGRAM_ID,
+          dexProgram: RAYDIUM_CPMM_PROGRAM_ID,
         })
         .signers([agent])
         .rpc();
@@ -261,7 +261,7 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
           usdcVault: usdcVaultAta,
           solVault: solVaultAta,
           priceUpdate: SOL_USD_PRICE_PDA,
-          jupiterProgram: JUPITER_V6_PROGRAM_ID,
+          dexProgram: RAYDIUM_CPMM_PROGRAM_ID,
         })
         .signers([agent])
         .rpc();
@@ -294,7 +294,7 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
           usdcVault: usdcVaultAta,
           solVault: solVaultAta,
           priceUpdate: SOL_USD_PRICE_PDA,
-          jupiterProgram: JUPITER_V6_PROGRAM_ID,
+          dexProgram: RAYDIUM_CPMM_PROGRAM_ID,
         })
         .signers([agent])
         .rpc();
@@ -332,7 +332,7 @@ describe("spectraq_vault — execute_trade Jupiter guards", function () {
           usdcVault: usdcVaultAta,
           solVault: solVaultAta,
           priceUpdate: SOL_USD_PRICE_PDA,
-          jupiterProgram: JUPITER_V6_PROGRAM_ID,
+          dexProgram: RAYDIUM_CPMM_PROGRAM_ID,
         })
         .remainingAccounts([
           { pubkey: attackerAta, isSigner: false, isWritable: true },

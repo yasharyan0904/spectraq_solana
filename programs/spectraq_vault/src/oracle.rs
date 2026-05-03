@@ -164,15 +164,15 @@ mod tests {
     use super::*;
     use pyth_solana_receiver_sdk::price_update::Price;
 
-    /// Sanity-check the hand-encoded `JUPITER_V6_PROGRAM_ID` byte array
+    /// Sanity-check the hand-encoded `RAYDIUM_CPMM_PROGRAM_ID` byte array
     /// matches the canonical base58 string. If someone re-derives the
     /// constant in the future this test catches a typo immediately.
     #[test]
-    fn jupiter_v6_program_id_decodes_to_canonical_b58() {
-        use crate::constants::JUPITER_V6_PROGRAM_ID;
+    fn raydium_cpmm_program_id_decodes_to_canonical_b58() {
+        use crate::constants::RAYDIUM_CPMM_PROGRAM_ID;
         assert_eq!(
-            JUPITER_V6_PROGRAM_ID.to_string(),
-            "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+            RAYDIUM_CPMM_PROGRAM_ID.to_string(),
+            "DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb"
         );
     }
 

@@ -63,17 +63,22 @@ than dressing it up."*
 holds 30 USDC and 0.3 wSOL — that's a $55 NAV against 52.7 SPQS shares.
 The Signal panel shows the latest decision. The Agent activity feed below
 shows the loop in real time: every minute the agent pulls prices,
-computes the MA-crossover signal, decides a trade, and calls Jupiter for
-a quote. On devnet Jupiter's aggregator does not route the devnet USDC
-mint, so the swap step fails — you can see that error inline in the
-activity feed. On mainnet beta the same call settles. Withdrawals work
-either way."*
+computes the MA-crossover signal, decides a trade, and submits a swap to
+the registered Raydium CPMM USDC↔wSOL pool. The Raydium pool depth card
+under the agent feed shows the live reserves — every successful trade
+moves them. On mainnet beta the same `execute_trade` instruction
+re-introduces aggregation; the program-level invariants (destination ATA,
+Pyth slippage floor, 30% NAV cap) hold either way. Withdrawals work
+regardless of agent state."*
 
 **Beats:** point at: **Vault NAV**, **Vault USDC**, **Vault SOL**,
 **Your shares**, **Your equity**. Then the Signal panel direction
 (LONG / FLAT). Then scroll to the **Agent activity** panel and walk
 through the most recent three events: signal computed, trade executing,
-trade failed-on-devnet.
+trade landed (with explorer link). Finish on the Raydium pool card.
+Optional: click "Pool" → `/app/pool` to show the admin liquidity-top-up
+form. With the admin wallet connected, type a USDC amount; the form
+auto-derives the matching wSOL deposit from the live pool ratio.
 
 ## 1:30–2:15 — Deposit flow
 
