@@ -36,17 +36,17 @@ describe("mockComputeSignal", () => {
   it("rising prices → 1", () => {
     expect(mockComputeSignal(rising(), FAST_N, SLOW_N, 0)).toBe(1);
   });
-  it("flat prices → 0 (strict >)", () => {
-    expect(mockComputeSignal(flat(), FAST_N, SLOW_N, 0)).toBe(0);
+  it("flat prices → -1 (strict >)", () => {
+    expect(mockComputeSignal(flat(), FAST_N, SLOW_N, 0)).toBe(-1);
   });
-  it("declining prices → 0", () => {
-    expect(mockComputeSignal(declining(), FAST_N, SLOW_N, 0)).toBe(0);
+  it("declining prices → -1", () => {
+    expect(mockComputeSignal(declining(), FAST_N, SLOW_N, 0)).toBe(-1);
   });
   it("threshold filters 0.5 % gap when th=500 bps", () => {
     const arr = new Array<bigint>(50).fill(100_000_000n);
     for (let i = 40; i < 50; i++) arr[i] = 100_500_000n;
     expect(mockComputeSignal(arr, FAST_N, SLOW_N, 0)).toBe(1);
-    expect(mockComputeSignal(arr, FAST_N, SLOW_N, 500)).toBe(0);
+    expect(mockComputeSignal(arr, FAST_N, SLOW_N, 500)).toBe(-1);
   });
   it("rejects wrong-length input", () => {
     expect(() => mockComputeSignal([1n, 2n, 3n], FAST_N, SLOW_N, 0)).toThrow();
@@ -63,31 +63,43 @@ describe("mockComputeSignal", () => {
 describe("decideTrade", () => {
   const balUsdcHeavy = { usdcE6: 100_000_000n, solLamports: 0n };
   const balSolHeavy = { usdcE6: 0n, solLamports: 1_000_000_000n };
+  const balSplit = { usdcE6: 30_000_000n, solLamports: 300_000_000n };
 
-  it("signal=1 + position=usdc → opens long", () => {
+  it("signal=1 + USDC available → opens long", () => {
     const a = decideTrade(1, "usdc", balUsdcHeavy);
     expect(a).not.toBeNull();
     expect((a!.direction as any).usdcToSol).toBeDefined();
-    // 30 % of 100 USDC = 30 USDC.
-    expect(a!.amountIn).toBe(30_000_000n);
+    // 10 % of 100 USDC = 10 USDC.
+    expect(a!.amountIn).toBe(10_000_000n);
     expect(a!.label).toBe("long_open");
   });
-  it("signal=0 + position=sol → closes long", () => {
-    const a = decideTrade(0, "sol", balSolHeavy);
+  it("signal=-1 + SOL available → closes long", () => {
+    const a = decideTrade(-1, "sol", balSolHeavy);
     expect(a).not.toBeNull();
     expect((a!.direction as any).solToUsdc).toBeDefined();
-    expect(a!.amountIn).toBe(300_000_000n);
+    expect(a!.amountIn).toBe(100_000_000n);
     expect(a!.label).toBe("long_close");
   });
-  it("signal=1 + position=sol → no churn", () => {
+  it("signal=1 + only SOL → no churn (nothing to swap)", () => {
     expect(decideTrade(1, "sol", balSolHeavy)).toBeNull();
   });
-  it("signal=0 + position=usdc → no churn", () => {
-    expect(decideTrade(0, "usdc", balUsdcHeavy)).toBeNull();
-  });
-  it("signal=-1 → never trades (Mode 1 long-only)", () => {
-    expect(decideTrade(-1, "sol", balSolHeavy)).toBeNull();
+  it("signal=-1 + only USDC → no churn (nothing to swap)", () => {
     expect(decideTrade(-1, "usdc", balUsdcHeavy)).toBeNull();
+  });
+  it("signal=1 + split → continues taper (still has USDC)", () => {
+    const a = decideTrade(1, "split", balSplit);
+    expect(a).not.toBeNull();
+    expect((a!.direction as any).usdcToSol).toBeDefined();
+  });
+  it("signal=-1 + split → continues taper (still has SOL)", () => {
+    const a = decideTrade(-1, "split", balSplit);
+    expect(a).not.toBeNull();
+    expect((a!.direction as any).solToUsdc).toBeDefined();
+  });
+  it("signal=0 → never trades (hold)", () => {
+    expect(decideTrade(0, "sol", balSolHeavy)).toBeNull();
+    expect(decideTrade(0, "usdc", balUsdcHeavy)).toBeNull();
+    expect(decideTrade(0, "split", balSplit)).toBeNull();
   });
   it("zero source balance → null (no division by zero)", () => {
     expect(decideTrade(1, "usdc", { usdcE6: 0n, solLamports: 0n })).toBeNull();

@@ -14,9 +14,9 @@ and the current status of each item against the prompt-9 audit checklist.
 | ✅ | No instruction transfers funds to non-vault, non-depositor     | `instructions/withdraw.rs` (depositor-only path) and `instructions/execute_trade.rs:151-168` (DEX destination ATA pinned to vault's own ATA) |
 | ✅ | All math is checked                                            | `checked_mul` / `checked_add` / `checked_sub` are the only arithmetic ops in `instructions/{deposit_*,withdraw,execute_trade}.rs` and `oracle.rs` |
 | ✅ | Agent key is logically separated from admin key                | `instructions/initialize_vault.rs:66-70` (`require_keys_neq!` returns `AgentEqualsAdmin`) |
-| ✅ | Pyth staleness validated on every read                         | `oracle.rs::DEFAULT_MAX_AGE_SECONDS = 60` plus `get_price_no_older_than` calls in `oracle.rs::get_price_e6`, used by `deposit_sol.rs` and `execute_trade.rs:122-127` |
+| ✅ | Pyth staleness validated on every read                         | `oracle.rs::DEFAULT_MAX_AGE_SECONDS = 600` (devnet — Pyth publishers stall intermittently; mainnet would tighten back to 60) plus `get_price_no_older_than` calls in `oracle.rs::get_price_e6`, used by `deposit_sol.rs` and `execute_trade.rs:122-127` |
 | ✅ | Trade size capped at 30% NAV                                   | `constants.rs:14` (`MAX_TRADE_SIZE_BPS = 3_000`), enforced at `execute_trade.rs:114-120` against the **live source ATA balance**, not a stale field |
-| ✅ | Slippage capped at 5% from oracle                              | `constants.rs:45` (`MAX_SLIPPAGE_BPS = 500`), enforced at `execute_trade.rs:122-149` (oracle-derived `expected_out` × `(10000 - 500) / 10000` floor; user `min_amount_out` cannot loosen it) |
+| ✅ | Slippage capped vs oracle (10% devnet / 5% mainnet target)     | `constants.rs:47` (`MAX_SLIPPAGE_BPS = 1000` on devnet — Raydium CPMM fee config + thin-pool impact already eats ~5–7% per swap, so a tight 5% floor is incompatible with Raydium's own slippage check; mainnet target is 500). Enforced at `execute_trade.rs:122-149` (oracle-derived `expected_out` × `(10000 - MAX_SLIPPAGE_BPS) / 10000` floor; user `min_amount_out` cannot loosen it) |
 | ✅ | Withdrawal works regardless of signal/agent/pending state      | `instructions/withdraw.rs:72+` — there is no signal-state guard; the only constraints are `has_one` ATA mappings and the user's share balance |
 | ⚠ | No upgrade-authority footgun                                   | **Open.** Upgrade authority is `GwAAvyBYo84b6CVprV9w2qo4PVqVKiDStDD1o16kj6J8` for the hackathon. Renunciation procedure below |
 
@@ -70,6 +70,31 @@ roadmap item.
 admin-as-signer instruction after that. Holding the admin keypair after
 init does **not** confer fund-moving authority. Holding the program
 upgrade authority does, until it is renounced.
+
+### Pool auto-rebalancer (devnet-only) — outside the trust boundary
+
+`scripts/rebalance_pool.ts` is a developer-side daemon that swaps its
+own wallet's USDC ↔ wSOL against the Raydium CPMM pool to keep the
+pool's implied price aligned with Pyth (mainnet substitute for natural
+arbitrage; agent's Pyth-floor would otherwise block trades whenever the
+isolated devnet pool drifts out of band). It is **not part of the vault
+program** and has no special authority:
+
+- It does not sign as `admin` or `agent`. It signs as whatever wallet
+  `ANCHOR_WALLET` points at — by default the deploy wallet, configurable
+  via `REBALANCE_WALLET`.
+- It can only swap that wallet's own funds. The vault program does not
+  expose any instruction the rebalancer could call to move vault funds.
+- A compromised rebalancer wallet hurts the operator's own balance only
+  (capped at `MAX_REBALANCE_USDC` per swap, default $200). Vault
+  depositors are unaffected — the vault's invariants do not depend on
+  the rebalancer running, only on Pyth being honest.
+- The script is **not run on mainnet** — there are no `mainnet` checks
+  in the codebase that read it, no instruction expects it, and it is
+  deliberately omitted from `--no-rebalancer` setups.
+
+In short: deleting the rebalancer reduces demo trade success rate on
+devnet but never reduces vault security.
 
 ## Renouncing upgrade authority
 

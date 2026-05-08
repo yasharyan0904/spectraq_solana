@@ -42,6 +42,13 @@ pub const RAYDIUM_CPMM_PROGRAM_ID: Pubkey =
 
 /// Maximum allowed slippage versus the Pyth-derived expected output, in bps.
 /// Prevents the agent from setting min_amount_out far below the oracle price
-/// (sandwich/MEV defense). 500 bps = 5%.
+/// (sandwich/MEV defense).
+///
+/// 1000 bps = 10% (devnet). The mainnet target is 500 bps (5%) — devnet's
+/// Raydium CPMM pools are thin enough that fee config + price impact
+/// already eats ~5–7% on every swap, so a tight 5% floor combined with
+/// Raydium's own slippage check leaves no value of `min_amount_out` that
+/// satisfies both. 10% lets devnet trades land while still providing
+/// meaningful sandwich/MEV protection. Tighten back to 500 on mainnet.
 #[constant]
-pub const MAX_SLIPPAGE_BPS: u64 = 500;
+pub const MAX_SLIPPAGE_BPS: u64 = 1000;

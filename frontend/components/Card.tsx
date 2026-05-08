@@ -18,13 +18,13 @@ export function Card({
   return (
     <div
       {...rest}
-      className={`rounded-[14px] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 ${className}`}
+      className={`rounded-[16px] border border-[var(--color-border)] glass card-glow card-inner-light p-5 ${className}`}
     >
       {(title || right) && (
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             {title && (
-              <h3 className="text-sm font-medium text-[var(--color-text)]">{title}</h3>
+              <h3 className="text-sm font-medium tracking-wide text-[var(--color-text)]">{title}</h3>
             )}
             {subtitle && (
               <p className="mt-1 text-xs text-[var(--color-muted)]">{subtitle}</p>
@@ -65,7 +65,7 @@ export function Stat({
       </div>
       <div
         className={`mt-1 text-xl ${mono ? "mono" : ""} ${valueColor}`}
-        style={{ fontWeight: 500 }}
+        style={{ fontWeight: 600 }}
       >
         {value}
       </div>

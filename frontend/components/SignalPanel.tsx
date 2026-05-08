@@ -28,7 +28,7 @@ export function SignalPanel() {
       right={
         <div className="flex items-center gap-2">
           <span
-            className={`block h-2.5 w-2.5 rounded-full ${isPending ? "pulse-dot" : ""}`}
+            className={`block h-2.5 w-2.5 rounded-full ${isPending ? "pulse-dot" : ""} ${signalText === "LONG" && !isPending ? "glow-ring" : ""}`}
             style={{ background: dotColor }}
           />
           <span className="mono text-[11px] uppercase tracking-wider text-[var(--color-muted)]">

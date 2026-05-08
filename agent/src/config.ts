@@ -131,7 +131,7 @@ export function loadConfig(): AgentConfig {
       "PYTH_SOL_USD_FEED_ID_HEX",
       SOL_USD_FEED_ID_HEX_DEFAULT,
     ),
-    pythMaxAgeSeconds: asInt(optional("PYTH_MAX_AGE_SECONDS", "60"), "PYTH_MAX_AGE_SECONDS"),
+    pythMaxAgeSeconds: asInt(optional("PYTH_MAX_AGE_SECONDS", "300"), "PYTH_MAX_AGE_SECONDS"),
     arciumClusterOffset: asInt(
       optional("ARCIUM_CLUSTER_OFFSET", "456"),
       "ARCIUM_CLUSTER_OFFSET",

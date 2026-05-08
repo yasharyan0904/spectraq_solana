@@ -32,10 +32,15 @@ pub const PRICE_BOUNDS_SOL_USD: (u64, u64) = (10_000_000, 1_000_000_000);
 const MAX_CONF_BPS: u128 = 100; // 1.00% in basis points
 const BPS_DENOM: u128 = 10_000;
 
-/// Default freshness window for the SOL/USD price. Anchor side reads this
-/// from `.env` (`PYTH_MAX_AGE_SECONDS`) so it can be tightened post-deploy
-/// without a program redeploy. 60 s matches Pyth's published cadence target.
-pub const DEFAULT_MAX_AGE_SECONDS: u64 = 60;
+/// Default freshness window for the SOL/USD price.
+///
+/// Mainnet target is ~60 s (Pyth's published cadence), but devnet
+/// publishers push intermittently — ~5–10 minute stalls are common. We
+/// widen the on-chain cap to 600 s so deposits / `execute_trade` stay
+/// usable on devnet during normal Pyth cadence gaps. Sub-windows can
+/// still be tightened off-chain via `PYTH_MAX_AGE_SECONDS` (read by the
+/// agent's `priceFeed.ts` and the frontend's NAV API).
+pub const DEFAULT_MAX_AGE_SECONDS: u64 = 600;
 
 /// Read a verified Pyth price update, validate it, and normalize to USDC e6.
 ///

@@ -1,0 +1,502 @@
+================================================================================
+  SPECTRAQ — COMPLETE PRODUCT + ARCHITECTURE OVERVIEW
+================================================================================
+
+A non-custodial AI-driven trading vault on Solana. Users deposit USDC, receive
+fungible share tokens, and an automated agent rotates the vault between USDC
+and SOL based on a moving-average crossover signal. Withdraws are always
+permissionless and instant; admin and agent keys cannot move user funds.
+
+
+--------------------------------------------------------------------------------
+1. THE ONE-PARAGRAPH VERSION
+--------------------------------------------------------------------------------
+
+You deposit USDC into a Solana program (the "vault"). The vault mints you
+share tokens that represent your % of the vault's total holdings. An off-chain
+agent watches SOL price, decides "buy SOL" or "sell SOL", and submits trades
+that the on-chain vault program validates and executes against a Raydium DEX
+pool. Vault NAV (net asset value) goes up if the agent is right, down if it's
+wrong. You can redeem your shares at any time for your proportional share of
+whatever USDC + SOL the vault is holding right now — no admin can stop you,
+no agent can front-run you, the program enforces everything by code.
+
+
+--------------------------------------------------------------------------------
+2. THE THREE LAYERS
+--------------------------------------------------------------------------------
+
+There are exactly three things to keep separate in your head:
+
+  LAYER 1 — THE VAULT      (your money's home)
+  LAYER 2 — THE POOL       (the trading venue)
+  LAYER 3 — THE AGENT      (the brain)
+
+They are independent programs / processes / wallets. They communicate
+through Solana transactions. None of them owns the others' state.
+
+  +-------------------------------------------------------------+
+  |                       USER WALLET                           |
+  |              (Phantom / Solflare / etc.)                    |
+  +-------------------------------------------------------------+
+       |                       ^                       ^
+       | deposit / withdraw    |                       |
+       v                       |                       |
+  +----------------+    +-----------------+    +---------------+
+  | LAYER 1        |    | LAYER 2         |    | LAYER 3       |
+  | spectraq_vault |    | Raydium CPMM    |    | Off-chain     |
+  | Anchor program |◄──►|  pool           |◄──►| agent (TS)    |
+  | on-chain       |    | (3rd-party DEX) |    | runs every 60s|
+  +----------------+    +-----------------+    +---------------+
+       ^                       ^                       |
+       |                       |                       |
+       | invokes Raydium       |                       | submits
+       | via vault PDA         |                       | trade tx
+       | (invoke_signed)       |                       v
+       +-----------------------+----------------+
+                                                |
+                                       +--------+--------+
+                                       | Pyth oracle     |
+                                       | (SOL/USD)       |
+                                       +-----------------+
+
+
+LAYER 1 — THE VAULT (programs/spectraq_vault)
+=============================================
+
+What it is:
+  An Anchor program (Rust) deployed on Solana devnet at:
+      96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN
+
+What it owns:
+  - usdc_vault ATA  : the vault's USDC reserves
+  - sol_vault  ATA  : the vault's wSOL reserves (wrapped SOL)
+  - share_mint      : the SPL mint that issues vault share tokens (SPQS)
+  - vault_state PDA : metadata (admin, agent, totals, last signal, etc.)
+
+Instructions it exposes:
+  initialize_vault          - one-shot, sets admin + agent + mints
+  deposit_usdc              - user -> vault USDC ATA, mint shares
+  deposit_sol               - user -> vault wSOL ATA, mint shares
+  withdraw                  - burn shares, return proportional USDC + wSOL
+  request_signal_computation- queue an Arcium MPC job (real-MPC mode)
+  compute_ma_signal_callback- Arcium delivers a decrypted signal
+  mock_callback_signal      - bypass for MOCK_MPC=true demos
+  execute_trade             - agent-only; CPI into Raydium for one swap
+  settle_pnl                - agent-only; snapshot NAV for the analytics index
+
+Share math:
+  First deposit:    shares_minted = usdc_deposited       (1 USDC = 1 share)
+  Later deposits:   shares_minted = usdc_value * total_shares / NAV
+  Withdraw:         usdc_out = shares_burned * vault_usdc / total_shares
+                    sol_out  = shares_burned * vault_sol  / total_shares
+
+NAV is recomputed on every deposit using live Pyth SOL/USD price, so
+you can never deposit at stale prices. Withdraw uses live ATA balances.
+
+
+LAYER 2 — THE RAYDIUM CPMM POOL (3rd-party DEX)
+================================================
+
+What it is:
+  A constant-product market maker (CPMM) running on Raydium's program:
+      DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb (devnet)
+  One specific pool the agent routes every USDC<->wSOL swap through:
+      GoZmddUBTdiyRoGZSfxwX8p5ZNoVhDo42YN996JdDwoi (devnet)
+
+Why a pool exists:
+  The agent decides "swap N USDC for SOL". Someone has to actually exchange
+  the tokens at a price. CPMM pools are the universal answer — anyone can
+  deposit liquidity, anyone can swap, the price is determined by a fixed
+  formula (constant product: x * y = k).
+
+Three roles in a Raydium pool:
+  - Trader   — sends one token, gets the other; pays a 0.25% fee.
+               THE VAULT IS A TRADER. Every execute_trade is a swap.
+  - LP       — deposits both tokens at current ratio, gets LP tokens that
+               compound trading fees. LPing is OPTIONAL and INDEPENDENT
+               of the vault — you don't need to LP to use the vault.
+  - Pool     — just data. Holds reserves, doesn't act.
+
+CPMM math:
+  At all times: usdc_reserve * wsol_reserve = k
+  Buying SOL: pay USDC into pool, take SOL out, k stays constant.
+  Implied price = usdc_reserve / wsol_reserve (USDC per SOL).
+  As you trade, implied price drifts; on mainnet, arbitrageurs realign
+  it to global markets within seconds. On devnet, no arbitrageurs.
+
+
+LAYER 3 — THE AGENT (agent/)
+============================
+
+What it is:
+  A Node.js / TypeScript process that runs on the operator's server (or
+  in the demo, locally). It signs as a single dedicated keypair, separate
+  from the program upgrade authority and the vault admin.
+
+Required by the program:
+  agent != admin (initialize_vault enforces require_keys_neq).
+  agent is the ONLY signer execute_trade and settle_pnl will accept.
+
+What it does each tick (60 seconds):
+  1. Pull 50 most recent 1-minute SOL/USDT closes from Binance REST.
+  2. Compute a moving-average crossover signal:
+       fast_avg = mean(last 10 closes)
+       slow_avg = mean(last 30 closes)
+       signal   = +1  if fast_avg > slow_avg * (1 + threshold)  -> BUY SOL
+                  -1  otherwise                                 -> SELL SOL
+  3. Stamp the signal on-chain via mock_callback_signal (or via Arcium
+     MPC in real-MPC mode — same cryptographically-verified result).
+  4. Read the vault's live USDC + SOL balances.
+  5. Decide how much to trade: 10% of the source-side balance per tick.
+  6. Read on-chain Pyth SOL/USD price. Compute the same Pyth-derived
+     output floor the program will apply.
+  7. Build a Raydium swap_base_input instruction targeting the vault's
+     ATAs, compute min_amount_out as max(quote*(1-slip), pyth_floor).
+  8. Submit one transaction calling execute_trade. The program
+     validates, then invoke_signed-s the Raydium ix as the vault PDA.
+
+What the agent CAN'T do (enforced by the program, not by trust):
+  - Move funds to its own wallet (destination ATA is pinned to vault).
+  - Trade larger than 30% of live source balance (MAX_TRADE_SIZE_BPS).
+  - Settle for less than 90% of Pyth price (MAX_SLIPPAGE_BPS).
+  - Block withdraws (withdraw doesn't read signal/agent state).
+  - Change admin or agent keys (no instruction exposes these).
+
+Worst-case agent compromise: ~5% per trade * 30% NAV per call until
+withdrawal. Bounded; depositors can always exit.
+
+
+--------------------------------------------------------------------------------
+3. THE FOURTH (DEVNET-ONLY) COMPONENT — THE REBALANCER
+--------------------------------------------------------------------------------
+
+What it is:
+  scripts/rebalance_pool.ts — a developer-side daemon that polls the pool
+  and Pyth, and when the implied price drifts > tolerance from Pyth,
+  swaps from the operator's wallet to push the pool back into band.
+
+Why it exists ON DEVNET ONLY:
+  Mainnet pools self-heal because arbitrage bots see mispricings within
+  milliseconds and trade them away for profit. Devnet has no arbitrage
+  bots. Without the rebalancer, after a few same-direction agent trades,
+  the pool drifts > 10% off Pyth, and the program's Pyth-floor blocks
+  every subsequent trade.
+
+Trust boundary:
+  The rebalancer is NOT part of the vault program. It owns no vault state,
+  signs as no privileged key, has no special authority. It's just an
+  ordinary Solana wallet that swaps in the same pool anyone else can swap
+  in. The vault's invariants do NOT depend on the rebalancer running —
+  only on Pyth being honest.
+
+Knobs:
+  REBALANCE_TOLERANCE_BPS  default 100   (act when pool > 1% off Pyth)
+  REBALANCE_INTERVAL_SEC   default 60    (poll every 60s)
+  MAX_REBALANCE_USDC       default 200   (clip swap size)
+
+For a balanced demo, REBALANCE_TOLERANCE_BPS=300 + INTERVAL_SEC=180
+gives the agent long quiet windows between rebalances.
+
+
+--------------------------------------------------------------------------------
+4. THE THREE TOKENS YOU INTERACT WITH (PLUS WSOL AND LP)
+--------------------------------------------------------------------------------
+
+USDC          (4zMMC9srt5Ri…ncDU on devnet, Circle's faucet-issued)
+              The unit of account. NAV, deposits, fees all priced in USDC.
+
+Native SOL    Lives in your wallet's lamports field. Pays gas. Cannot be
+              deposited directly to vault or pool — must be wrapped first.
+
+wSOL          (So111111111111…11112 — same on every cluster)
+              Wrapped SOL. SPL-token form of native SOL. 1 wSOL ≡ 1 SOL by
+              consensus, no peg risk. Wrap = transfer lamports to a wSOL
+              ATA + sync_native. Unwrap = closeAccount the wSOL ATA.
+              All trading and liquidity operations use wSOL, not native.
+
+SPQS shares   The vault's share token. Minted on deposit, burned on
+              withdraw. Mint authority = vault PDA. 1 share = your %
+              ownership of vault NAV.
+
+LP tokens     The Raydium pool's share token. Minted when you deposit
+              liquidity, burned when you withdraw. Independent of SPQS;
+              earns Raydium swap fees, not vault P&L.
+
+
+--------------------------------------------------------------------------------
+5. THE FULL TRADE FLOW (ONE TRANSACTION)
+--------------------------------------------------------------------------------
+
+A single execute_trade transaction does ALL of this, atomically:
+
+  Agent signs transaction
+       │
+       ▼
+  ┌───────────────────────────────────────────────────────────────┐
+  │  spectraq_vault::execute_trade                                │
+  │  ─────────────────────────────                                │
+  │  1. Verify agent signature                                    │
+  │  2. signal_state == Ready                                     │
+  │  3. Direction matches last_signal (no opportunistic trades)   │
+  │  4. amount <= 30% live source ATA balance                     │
+  │  5. Read Pyth -> compute expected_out, floor at 90%           │
+  │  6. min_amount_out >= floor (Pyth defense)                    │
+  │  7. destination ATA == vault's own ATA (anti-self-deal)       │
+  │                                                               │
+  │  ┌─────────────────────────────────────────────────────────┐  │
+  │  │  invoke_signed(Raydium swap_base_input, vault PDA seeds)│  │
+  │  │  ────────────────────────────────────────────────────── │  │
+  │  │  - SPL Token::transfer USDC out of vault.usdc_vault     │  │
+  │  │      into pool's USDC reserve                           │  │
+  │  │  - CPMM math: compute output                            │  │
+  │  │  - SPL Token::transfer wSOL from pool's wSOL reserve    │  │
+  │  │      into vault.sol_vault                               │  │
+  │  └─────────────────────────────────────────────────────────┘  │
+  │                                                               │
+  │  8. realized_out >= min_amount_out (Raydium output check)     │
+  │  9. Update vault.usdc_balance, vault.sol_balance              │
+  │ 10. signal_state = Idle                                       │
+  │ 11. emit TradeExecuted event                                  │
+  └───────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  Transaction confirmed. Vault NAV refreshed.
+  Frontend dashboard pulls the new state via /api/vault.
+
+Note: the agent's wallet is the signer of the OUTER transaction, but the
+INNER Raydium CPI is signed by the VAULT PDA via invoke_signed. The vault
+has a fixed seed [VAULT_SEED, admin_pubkey] + bump, so any code path that
+wants to act as the vault must derive that PDA — and only the vault
+program itself can do invoke_signed with the correct seeds.
+
+This is the technical foundation of the non-custodial guarantee:
+the agent's signature authorizes the agent to TRIGGER the vault, but
+the actual fund movement is signed by the vault itself.
+
+
+--------------------------------------------------------------------------------
+6. THE STRATEGY
+--------------------------------------------------------------------------------
+
+Strategy:
+  Long-only Mode 1 — Moving-Average crossover on SOL/USDT.
+  Inputs:
+    - 50 x 1m candles from Binance REST
+    - STRATEGY_FAST_N = 10  (short window)
+    - STRATEGY_SLOW_N = 30  (long window)
+    - STRATEGY_THRESHOLD_BPS = 0  (no confirmation buffer)
+  Decision:
+    fast_avg > slow_avg  -> +1 (long SOL)
+    fast_avg <= slow_avg -> -1 (flat / sell SOL)
+
+Trade size:
+  10% of source-side balance per tick. Conservative — taper-in / taper-out.
+  Program enforces a 30% structural cap (MAX_TRADE_SIZE_BPS).
+
+Validation result (Monte Carlo Permutation Test, prompt 7):
+  IS Sharpe              : 0.52
+  IS p-value             : 0.3417   (NOT significant)
+  Walk-forward Sharpe    : -0.397   (NEGATIVE)
+  Walk-forward p-value   : 0.4776   (NOT significant)
+  Verdict                : NO_SHIP
+
+The strategy is INTENTIONALLY weak — the value of SpectraQ is the
+infrastructure (non-custodial vault, MPC-based signal privacy, on-chain
+slippage defenses, share-based accounting), not the alpha. Mode 2 will
+replace this with a real strategy after live audit.
+
+
+--------------------------------------------------------------------------------
+7. NON-CUSTODIAL GUARANTEES (WHAT THE PROGRAM ENFORCES BY CODE)
+--------------------------------------------------------------------------------
+
+Each invariant is enforced in Rust, in the Anchor program — not by trust,
+not by docs, not by audit recommendations. Every one of these has a code
+reference in SECURITY.md.
+
+  [1]  No instruction transfers vault USDC/SOL to non-vault addresses,
+       except (a) the original depositor on withdraw, or (b) the
+       registered DEX program with destination = vault's own ATA.
+
+  [2]  agent != admin at init. require_keys_neq! returns AgentEqualsAdmin.
+
+  [3]  execute_trade and settle_pnl gated to agent pubkey only.
+
+  [4]  withdraw works regardless of signal_state, pending_computation,
+       or any agent activity. There is no signal/agent guard.
+
+  [5]  Trade size capped at 30% of LIVE source-ATA balance (not cached).
+
+  [6]  Slippage capped at 10% vs Pyth-derived expected output (devnet;
+       mainnet target 5%).
+
+  [7]  All math uses checked_mul / checked_add / checked_sub.
+
+  [8]  Pyth staleness validated on every read (max 600s on devnet,
+       60s mainnet target).
+
+What admin can do:        sign initialize_vault (one-shot only).
+                          That's it. After init, admin has no authority.
+
+What agent can do:        request signal computation, submit one
+                          execute_trade per signal, snapshot NAV.
+
+What admin/agent CANNOT:  move funds to their wallets, change admin/agent
+                          keys, block withdraws, swap > 30% per call,
+                          settle below 90% of Pyth, bypass the DEX
+                          destination check.
+
+
+--------------------------------------------------------------------------------
+8. ON-CHAIN ARTIFACTS (DEVNET)
+--------------------------------------------------------------------------------
+
+  Program ID            96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN
+  Arcium MXE            HjiD5aGYnE3unNnKh89xF7thQrF636i2RUw6jV2jNnKt
+  Arcium cluster offset 456
+  Recovery set size     4
+  USDC mint             4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+  wSOL mint             So11111111111111111111111111111111111111112
+  Pyth SOL/USD          7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE
+  Raydium CPMM program  DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb
+  Pool                  GoZmddUBTdiyRoGZSfxwX8p5ZNoVhDo42YN996JdDwoi
+  Vault PDA (demo)      HqihtPzCYaJb9cSKiqz8VonSLRhnpiC7AvtVBU1K8Vwn
+
+
+--------------------------------------------------------------------------------
+9. REPO LAYOUT
+--------------------------------------------------------------------------------
+
+  spectraq/
+  ├── programs/spectraq_vault/   Anchor program (Rust, Anchor 0.32.1)
+  │   └── src/instructions/      deposit/withdraw/execute_trade/settle_pnl
+  ├── encrypted-ixs/             Arcis MPC circuits (privacy-preserving)
+  ├── agent/                     TS agent: signal -> execute_trade
+  │   └── src/                   priceFeed, raydium, trader, arcium, safety
+  ├── strategy/                  Python: MA + Monte Carlo permutation test
+  ├── frontend/                  Next.js 16 App Router + wallet adapter
+  ├── tests/                     Anchor + integration TS tests
+  ├── scripts/
+  │   ├── preflight.sh           toolchain check
+  │   ├── init-mxe.sh            register Arcium MXE
+  │   ├── initialize_vault.ts    one-shot vault setup
+  │   ├── seed_demo_funds.ts     seed demo deposits
+  │   ├── create_raydium_pool.ts provision the trading pool
+  │   ├── add_pool_liquidity.ts  CLI: deposit pool LP
+  │   ├── remove_pool_liquidity.ts CLI: redeem pool LP
+  │   ├── rebalance_pool.ts      CLI / daemon: align pool to Pyth (devnet)
+  │   └── demo.sh                end-to-end orchestrator
+  ├── README.md
+  ├── SECURITY.md
+  ├── DEMO_SCRIPT.md
+  └── .env (HELIUS, PYTH, RAYDIUM, MXE addresses)
+
+
+--------------------------------------------------------------------------------
+10. OPERATIONS QUICK REFERENCE
+--------------------------------------------------------------------------------
+
+Start everything (idempotent):
+  bash scripts/demo.sh
+
+Stop everything:
+  bash scripts/demo.sh --stop
+
+Selective skips:
+  bash scripts/demo.sh --no-agent
+  bash scripts/demo.sh --no-fe
+  bash scripts/demo.sh --no-rebalancer
+
+Rebalancer-friendly demo (recommended for live trade-watching):
+  REBALANCE_TOLERANCE_BPS=300 REBALANCE_INTERVAL_SEC=180 bash scripts/demo.sh
+
+Pool LP operations (UI: localhost:3000/app/pool, with toggle):
+  USDC_AMOUNT=20 ANCHOR_WALLET=~/.config/solana/id.json pnpm topup
+  LP_AMOUNT=0.05 ANCHOR_WALLET=~/.config/solana/id.json pnpm withdraw-pool
+  LP_AMOUNT=max  ANCHOR_WALLET=~/.config/solana/id.json pnpm withdraw-pool
+
+Pool rebalance (one-shot or daemon):
+  ANCHOR_WALLET=~/.config/solana/id.json pnpm rebalance
+  ANCHOR_WALLET=~/.config/solana/id.json pnpm rebalance:loop
+
+Watch live activity:
+  tail -f logs/agent_*.log logs/rebalancer_*.log
+
+Frontend URLs:
+  /            Landing
+  /strategy    Strategy + MCPT validation results (NO_SHIP banner)
+  /app         Dashboard: NAV, signal, recent trades
+  /app/deposit Deposit USDC into vault
+  /app/withdraw Burn shares, redeem proportional USDC + SOL
+  /app/pool    Raydium pool LP deposit / withdraw (toggle)
+
+
+--------------------------------------------------------------------------------
+11. THE THREE BALANCE SHEETS (HOW VALUE FLOWS)
+--------------------------------------------------------------------------------
+
+Three independent wallets / accounts to track:
+
+  YOU (depositor):
+    + share tokens (SPQS) — proof of vault ownership
+    - USDC (you deposited)
+    + USDC + SOL (when you withdraw)
+    Equity = your shares / total shares × NAV
+
+  VAULT PDA:
+    Holds: usdc_vault ATA + sol_vault ATA + share_mint authority
+    Trades USDC <-> wSOL via Raydium CPI
+    Cannot move funds anywhere except (a) back to depositor on withdraw,
+    or (b) into the pool during a swap
+
+  REBALANCER WALLET (devnet only):
+    Periodically swaps a few % of itself in the pool to track Pyth
+    Loses SOL during agent buy bursts, gains USDC (or vice versa)
+    Net "subsidy" to keep devnet pool aligned; mainnet replaces this with
+    natural arbitrage
+
+  POOL (Raydium, third-party):
+    Holds: USDC reserve + wSOL reserve
+    Acts on incoming trades; nets to ~zero plus accumulated fees
+
+Vault depositor's P&L = strategy P&L = NAV growth.
+Pool LP's P&L = swap fee accumulation (separate from vault).
+Rebalancer wallet's "P&L" = devnet operating cost.
+
+
+--------------------------------------------------------------------------------
+12. WHAT'S NEXT (ROADMAP)
+--------------------------------------------------------------------------------
+
+Mode 2:
+  - Real strategy (currently NO_SHIP per MCPT)
+  - Multi-asset basket (not just SOL)
+  - Governed set_agent instruction (rotate compromised agents)
+  - Live audit before mainnet
+
+Mainnet path:
+  - Audit
+  - Test on a private cluster mainnet fork
+  - 14-day grace window with renounce tx published in this repo
+  - Renounce upgrade authority irreversibly
+
+Drop on mainnet:
+  - The auto-rebalancer (arbitrage handles it for free)
+  - Defaults tightened: MAX_SLIPPAGE_BPS 1000 -> 500, Pyth staleness 600 -> 60
+
+
+--------------------------------------------------------------------------------
+13. THE ONE-LINE TRUTH
+--------------------------------------------------------------------------------
+
+You give USDC to a program. The program lets a bot swap that USDC for SOL
+and back, but only inside narrow safety bounds enforced by code. You can
+take your share back any time. The bot can't run away with the money,
+and neither can the people who deployed the bot.
+
+That's it. Everything else is plumbing.
+
+================================================================================
+  END OF FILE
+================================================================================

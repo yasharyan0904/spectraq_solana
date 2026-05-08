@@ -7,6 +7,19 @@
 //                  3-attempt circuit-breaker; raises a typed error on
 //                  permanent failure so the main loop can warn-and-skip.
 //
+// `min_amount_out` derivation — the program enforces *two* checks the
+// agent must satisfy simultaneously:
+//   (a) on-chain Pyth floor in execute_trade.rs:154,
+//         min_amount_out >= pyth_expected_out × (1 − MAX_SLIPPAGE_BPS/10000)
+//   (b) Raydium's own swap_base_input,
+//         realized_out >= min_amount_out
+// Setting `min_amount_out = quote × (1 − slip)` alone fails (a) whenever
+// the pool drifts even mildly off Pyth. So we read the on-chain Pyth
+// price ourselves, compute the same floor the program will apply, and
+// clamp `min_amount_out = max(quote × (1 − slip), pyth_floor)`. If the
+// pool can't deliver the floor, Raydium fails (b) which is the *correct*
+// outcome (don't trade against a stale pool).
+//
 // Position model:
 //   - "usdc": the vault is currently mostly USDC (e6 balance > 0,
 //             sol balance ≈ 0).
@@ -36,6 +49,47 @@ import { quoteAndBuildSwap, type RaydiumPoolConfig } from "./raydium.js";
 import type { Signal } from "./arcium.js";
 
 const { BN } = anchor;
+
+// Mirrors `MAX_SLIPPAGE_BPS` in programs/spectraq_vault/src/constants.rs
+// (devnet = 1000bps / 10%; mainnet target = 500bps). Used to compute the
+// same floor the on-chain program applies to min_amount_out.
+const ONCHAIN_MAX_SLIPPAGE_BPS = 1000n;
+const LAMPORTS_PER_SOL_U128 = 1_000_000_000n;
+
+// PriceUpdateV2 layout (see safety.ts for the full breakdown):
+//   8 disc + 32 write_authority + 1 verify_level + 32 feed_id = 73
+//   price (i64 LE) at 73, conf at 81, exponent (i32 LE) at 89.
+const PRICE_UPDATE_PRICE_OFFSET = 73;
+const PRICE_UPDATE_EXPONENT_OFFSET = 89;
+
+/**
+ * Read the SOL/USD price from a Pyth `PriceUpdateV2` account and return it
+ * in USDC e6 fixed point — same scale the on-chain program uses in
+ * `oracle::get_price_e6`. Throws if the price is non-positive (the agent
+ * caller treats this as a skip).
+ */
+async function readPythSolUsdE6(
+  connection: Connection,
+  feedAccount: PublicKey,
+): Promise<bigint> {
+  const acc = await connection.getAccountInfo(feedAccount, "confirmed");
+  if (!acc) throw new Error(`pyth feed account ${feedAccount.toBase58()} not found`);
+  if (acc.data.length < PRICE_UPDATE_EXPONENT_OFFSET + 4) {
+    throw new Error(`pyth feed account too small: ${acc.data.length} bytes`);
+  }
+  const buf = Buffer.from(acc.data);
+  const priceLo = BigInt(buf.readUInt32LE(PRICE_UPDATE_PRICE_OFFSET));
+  const priceHi = BigInt(buf.readInt32LE(PRICE_UPDATE_PRICE_OFFSET + 4));
+  const price = (priceHi << 32n) | priceLo;
+  const exponent = buf.readInt32LE(PRICE_UPDATE_EXPONENT_OFFSET);
+  // result_e6 = price × 10^(exponent + 6).
+  const shift = exponent + 6;
+  const e6 = shift >= 0
+    ? price * 10n ** BigInt(shift)
+    : price / 10n ** BigInt(-shift);
+  if (e6 <= 0n) throw new Error(`pyth price non-positive: ${e6}`);
+  return e6;
+}
 
 export type Position = "usdc" | "sol" | "split";
 
@@ -70,36 +124,49 @@ export interface TraderDeps {
 
 /**
  * Decide what (if anything) to trade given the freshly-stamped signal and
- * the current vault position. Returns null on no-churn.
+ * the current vault balances. Returns null on no-churn.
  *
- * Mode 1 long-only mapping:
- *   signal=1  + position=usdc → swap USDC → SOL (go long).
- *   signal=0  + position=sol  → swap SOL  → USDC (close long).
- *   signal=1  + position=sol  → null (already long).
- *   signal=0  + position=usdc → null (already flat).
- *   signal=-1 ANY              → null (Mode 1 never returns -1; defensive).
+ * Mode 1 long-only mapping (tristate {-1, 0, 1} matches on-chain
+ * `vault.last_signal: i8` and execute_trade.rs:99-104):
+ *   signal=1  + usdcE6 > 0       → swap 30% USDC → SOL (taper long).
+ *   signal=-1 + solLamports > 0  → swap 30% SOL  → USDC (taper flat).
+ *   signal=0                     → hold (no trade).
+ *   no source-side balance       → null (nothing to swap).
  *
- * `amountIn` defaults to 30 % of the source-side balance — exactly the
- * structural cap the vault enforces. Override via `amountInOverride` if
- * you want a smaller trade (e.g. running multiple legs to taper in).
+ * `amountIn` defaults to `TRADE_SIZE_BPS` of the source-side balance.
+ * The vault program enforces a 30% structural cap (`MAX_TRADE_SIZE_BPS`);
+ * the agent voluntarily uses a smaller fraction (10%) so CPMM price
+ * impact + slippage stays under the on-chain Pyth 5% floor on devnet's
+ * thin pool. Override via `amountInOverride` to taper differently.
+ *
+ * The classifier returned by readVaultBalances is informational only
+ * (logging/metrics); we drive the decision off live balances so a 50/50
+ * split doesn't lock the agent into permanent no-churn.
  */
 export function decideTrade(
   signal: Signal,
-  position: Position,
+  _position: Position,
   balances: { usdcE6: bigint; solLamports: bigint },
   opts: { slippageBps?: number; amountInOverride?: bigint } = {},
 ): TradeAction | null {
-  if (signal === -1) return null; // Mode 1 long-only
+  // Slippage tolerance on the off-chain CPMM quote — defines the lower
+  // bound of `min_amount_out` *relative to the Raydium quote*. We then
+  // separately clamp `min_amount_out` up to the on-chain Pyth floor
+  // (executeTrade below). 700bps absorbs the ~5% CurveCalculator-vs-
+  // on-chain delivery drift on devnet (Raydium's devnet AmmConfig has
+  // creator/fund fee fields that diverge from `getCpmmConfigs()` mainnet
+  // values, so our off-chain quote routinely overshoots reality by a
+  // few %). The Pyth floor still bites when the pool is mispriced, so
+  // a wide quote-relative tolerance does NOT relax the oracle defense.
+  // Mainnet tightens this back to ~100bps.
+  const slippageBps = opts.slippageBps ?? 700;
+  // Voluntary cap below the on-chain MAX_TRADE_SIZE_BPS=3000 (30%).
+  // Smaller trades take more ticks to taper but reliably land under the
+  // Pyth floor on the thin devnet pool.
+  const tenPct = (x: bigint) => (x * 1000n) / 10_000n;
 
-  // Devnet Raydium CPMM has thin reserves so the CurveCalculator quote can
-  // overshoot the actual on-chain delivery by several percent. The agent's
-  // off-chain slippage tolerance is widened accordingly; the on-chain Pyth
-  // floor (5% from oracle-implied output) remains the real safety net.
-  const slippageBps = opts.slippageBps ?? 800;
-  const thirty = (x: bigint) => (x * 3000n) / 10_000n;
-
-  if (signal === 1 && position === "usdc") {
-    const amountIn = opts.amountInOverride ?? thirty(balances.usdcE6);
+  if (signal === 1) {
+    const amountIn = opts.amountInOverride ?? tenPct(balances.usdcE6);
     if (amountIn <= 0n) return null;
     return {
       direction: { usdcToSol: {} },
@@ -108,8 +175,8 @@ export function decideTrade(
       label: "long_open",
     };
   }
-  if (signal === 0 && position === "sol") {
-    const amountIn = opts.amountInOverride ?? thirty(balances.solLamports);
+  if (signal === -1) {
+    const amountIn = opts.amountInOverride ?? tenPct(balances.solLamports);
     if (amountIn <= 0n) return null;
     return {
       direction: { solToUsdc: {} },
@@ -118,20 +185,7 @@ export function decideTrade(
       label: "long_close",
     };
   }
-  // split-position handling: behave like usdc for signal=1 (suppress) and
-  // sol for signal=0 (continue unwind).
-  if (signal === 1 && position === "split") return null;
-  if (signal === 0 && position === "split") {
-    const amountIn = opts.amountInOverride ?? thirty(balances.solLamports);
-    if (amountIn <= 0n) return null;
-    return {
-      direction: { solToUsdc: {} },
-      amountIn,
-      slippageBps,
-      label: "long_close_split",
-    };
-  }
-  return null;
+  return null; // signal === 0 → hold
 }
 
 // ---------------------------------------------------------------------------
@@ -220,10 +274,25 @@ export async function executeTrade(
         expectedDestinationAta: expectedDestAta,
       });
 
-      // Conservative min_amount_out: route.quote.outAmount × (1 − slippage).
+      // Conservative min_amount_out — must satisfy *both* checks:
+      //   (a) on-chain Pyth floor: min_amount_out ≥ pyth_expected × 0.90
+      //   (b) Raydium swap:        realized_out ≥ min_amount_out
+      // We clamp at the floor so (a) always passes; if Raydium can't
+      // deliver the floor, it'll reject (b) and we record a normal trade
+      // failure rather than a SlippageExceeded that needs investigation.
       const outAmountQuoted = BigInt(route.quote.outAmount);
-      const minAmountOut =
+      const slippedQuote =
         (outAmountQuoted * BigInt(10_000 - action.slippageBps)) / 10_000n;
+      const solUsdE6 = await readPythSolUsdE6(deps.connection, deps.pythSolUsdFeed);
+      const expectedPythOut = directionIsUsdcToSol
+        ? (action.amountIn * LAMPORTS_PER_SOL_U128) / solUsdE6
+        : (action.amountIn * solUsdE6) / LAMPORTS_PER_SOL_U128;
+      // floor = expected × (10000 - MAX_SLIPPAGE_BPS) / 10000
+      const pythFloor =
+        (expectedPythOut * (10_000n - ONCHAIN_MAX_SLIPPAGE_BPS)) / 10_000n;
+      // +1 lamport/e6 buffer against integer-rounding off-by-one.
+      const minAmountOut =
+        slippedQuote > pythFloor + 1n ? slippedQuote : pythFloor + 1n;
 
       const sig = await (deps.program.methods as any)
         .executeTrade(

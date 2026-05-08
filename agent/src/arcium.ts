@@ -101,7 +101,10 @@ export function mockComputeSignal(
   const factor = 10_000n + threshU;
   const left = fastSum * BigInt(slowN) * 10_000n;
   const right = slowSum * BigInt(fastN) * factor;
-  return left > right ? 1 : 0;
+  // Mode 1 long-only tristate: 1 = long SOL, -1 = flat (sell). The on-chain
+  // execute_trade enforces SolToUsdc requires last_signal == -1, so emitting
+  // 0 here would jam every sell with SignalDirectionMismatch (6008).
+  return left > right ? 1 : -1;
 }
 
 /**

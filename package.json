@@ -16,7 +16,11 @@
     "agent": "pnpm --filter agent start",
     "agent:dev": "pnpm --filter agent dev",
     "frontend": "pnpm --filter frontend dev",
-    "frontend:build": "pnpm --filter frontend build"
+    "frontend:build": "pnpm --filter frontend build",
+    "topup": "ts-node --transpile-only scripts/add_pool_liquidity.ts",
+    "withdraw-pool": "ts-node --transpile-only scripts/remove_pool_liquidity.ts",
+    "rebalance": "ts-node --transpile-only scripts/rebalance_pool.ts",
+    "rebalance:loop": "REBALANCE_LOOP=true ts-node --transpile-only scripts/rebalance_pool.ts"
   },
   "devDependencies": {
     "@arcium-hq/client": "^0.9.7",

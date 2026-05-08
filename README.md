@@ -50,9 +50,44 @@ bash scripts/demo.sh                      # ⇒ open http://localhost:3000
 8. start the agent (`MOCK_MPC=true` for reliable demo — Arcium devnet
    callbacks have multi-minute latency)
 9. start the Next.js frontend at `:3000`
-10. echo Solana Explorer links + log paths
+10. start the Raydium pool **auto-rebalancer** (devnet-only; keeps the
+    pool's implied SOL/USDC price within 1% of Pyth so the agent's
+    on-chain Pyth-floor doesn't block trades — mainnet wouldn't need
+    this since arbitrage bots tighten pools to the global price for free)
+11. echo Solana Explorer links + log paths
 
 Stop with `bash scripts/demo.sh --stop`. Live logs at `logs/demo_run_*.log`.
+
+Skip flags: `--no-agent`, `--no-fe`, `--no-rebalancer`. The rebalancer
+runs from the deploy wallet by default (it has both SOL and USDC);
+override with `REBALANCE_WALLET=path/to/keypair.json`. Tune via
+`REBALANCE_TOLERANCE_BPS` (default 100), `REBALANCE_INTERVAL_SEC` (60),
+`MAX_REBALANCE_USDC` (200) — see `scripts/rebalance_pool.ts`.
+
+### Pool operations (UI + CLI)
+
+Anyone with a wallet can LP into the Raydium CPMM pool the agent routes
+through (it's permissionless), and any LP holder can redeem at any time.
+
+**UI**: open `http://localhost:3000/app/pool` — the form has a
+**Deposit / Withdraw** toggle. Deposit takes a USDC amount and auto-wraps
+the matching SOL → wSOL. Withdraw burns LP tokens and auto-unwraps the
+returned wSOL back to native SOL. Both use the connected wallet adapter
+(Phantom / Solflare).
+
+**CLI** (uses `ANCHOR_WALLET` env, defaults to `~/.config/solana/id.json`):
+
+| Command | What it does |
+|---|---|
+| `USDC_AMOUNT=20 pnpm topup` | Deposit USDC + matching wSOL into the pool, receive LP. |
+| `LP_AMOUNT=0.05 pnpm withdraw-pool` | Burn 0.05 LP, receive proportional USDC + native SOL. |
+| `LP_AMOUNT=max  pnpm withdraw-pool` | Burn the wallet's full LP balance. |
+| `pnpm rebalance` | One-shot: align pool implied price to Pyth (within 1 %). |
+| `pnpm rebalance:loop` | Daemon: same, every 60s; auto-started by `demo.sh`. |
+
+LP positions are tracked by Raydium, *not* by the SpectraQ vault — they
+live in your wallet's LP token ATA and earn pool swap fees independently
+of any vault share you may also hold.
 
 ---
 
@@ -90,7 +125,21 @@ Stop with `bash scripts/demo.sh --stop`. Live logs at `logs/demo_run_*.log`.
         │    (TypeScript)      │   ── encrypt ─────▶ Arcium client
         │  agent ≠ admin key   │   ── trade ───────▶ Raydium CPMM
         └──────────────────────┘
+                                                    ▲
+        ┌──────────────────────┐                    │ swap to
+        │  Pool auto-rebalancer│  ── reads ─▶ Pyth  │ realign
+        │  (devnet only)       │  ── reads ─▶ pool  │ price
+        │  scripts/rebalance_  │  ── swaps ─────────┘
+        │  pool.ts             │       (admin/deploy wallet — NOT vault)
+        └──────────────────────┘
 ```
+
+The **rebalancer is a devnet-only housekeeping daemon**, separate from
+both the vault and the agent. It owns no vault state and cannot touch
+depositor funds — it just swaps its own wallet's USDC and wSOL against
+the Raydium pool to keep the pool's implied price within 1 % of Pyth
+(playing the arbitrageur role mainnet pools get for free). When the
+pool's implied price is in band, the daemon does nothing.
 
 Devnet artifacts:
 
@@ -129,16 +178,20 @@ through `tests/04_raydium.ts` assert each one.
    → `MAX_TRADE_SIZE_BPS = 3_000` in
    `programs/spectraq_vault/src/constants.rs:14`, enforced in
    `execute_trade.rs:114-120`.
-6. **Slippage on `execute_trade` is capped at 5% from the Pyth-derived
-   expected output**, not just the user-supplied `min_amount_out`.
-   → `MAX_SLIPPAGE_BPS = 500` in `constants.rs:45`, enforced in
-   `execute_trade.rs:122-149`.
+6. **Slippage on `execute_trade` is capped vs the Pyth-derived expected
+   output**, not just the user-supplied `min_amount_out`.
+   → `MAX_SLIPPAGE_BPS = 1000` (10% — devnet) in `constants.rs:47`,
+   enforced in `execute_trade.rs:122-149`. Mainnet target is 500
+   (5%); devnet's Raydium CPMM fee config + thin-pool impact already
+   consumes ~5–7% per swap, so 10% leaves room for Raydium's own
+   slippage check while still bounding sandwich/MEV exposure.
 7. **All vault arithmetic uses checked ops.** A `MathOverflow` aborts the
    tx — search for `checked_mul`, `checked_add`, `checked_sub` across the
    handlers.
 8. **Pyth staleness is validated on every read.**
-   `DEFAULT_MAX_AGE_SECONDS = 60s` in `programs/spectraq_vault/src/oracle.rs`;
-   used in `deposit_sol.rs` and `execute_trade.rs:122-127`.
+   `DEFAULT_MAX_AGE_SECONDS = 600s` in `programs/spectraq_vault/src/oracle.rs`
+   (devnet: Pyth publishers push intermittently; mainnet should tighten
+   back to ~60 s). Enforced in `deposit_sol.rs` and `execute_trade.rs:122-127`.
 9. **Pyth feed-id binding.** `vault_state.sol_usd_feed_id` is set at
    `initialize_vault` and verified on every price read — supplying a
    different Pyth account (e.g. USDC/USD) returns `InvalidPythFeed`.
@@ -179,7 +232,8 @@ jupyter lab notebooks/01_validate_ma_crossover.ipynb
   do not route against devnet liquidity, so SpectraQ ships against a single
   registered Raydium CPMM USDC↔wSOL pool that the demo script provisions
   (`scripts/create_raydium_pool.ts`). Trades clear at this pool's instantaneous
-  spot price subject to the program's 5% slippage guard. Mainnet beta will
+  spot price subject to the program's slippage guard (10% on devnet, 5%
+  on mainnet). Mainnet beta will
   re-introduce DEX aggregation through the same `execute_trade` interface
   (the program validates the destination ATA + Pyth-bounded slippage
   regardless of which AMM produces the route bytes). See
@@ -235,7 +289,7 @@ hackathon submission:
       `agent == admin` at init).
 - [x] Pyth staleness validated on every read.
 - [x] Trade size capped at 30% NAV.
-- [x] Slippage capped at 5% from oracle.
+- [x] Slippage capped vs oracle (10% on devnet / 5% on mainnet target).
 - [x] Withdrawal works regardless of signal state, agent state, or pending
       computations.
 - [ ] **Program upgrade authority not yet renounced.** Held by
@@ -255,7 +309,8 @@ spectraq/
 ├── frontend/                  Next.js 16 App Router
 ├── tests/                     Anchor + integration TS tests
 ├── scripts/                   preflight, init-mxe, initialize_vault,
-│                              seed_demo_funds, demo orchestrator
+│                              seed_demo_funds, demo orchestrator,
+│                              add/remove/rebalance pool liquidity
 ├── Anchor.toml
 ├── Arcium.toml                cluster_offset = 456, recovery_set_size = 4
 └── .env.example

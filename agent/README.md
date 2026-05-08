@@ -89,8 +89,9 @@ drawdown, set `NAV_FLOOR_OVERRIDE=true` and restart.
 
 Each tick reads the on-chain `PriceUpdateV2.publish_time` directly
 (without a full Anchor deserialize) and skips the tick if it's older
-than `PYTH_MAX_AGE_SECONDS`. Defaults to 60 s, matching the on-chain cap
-in `oracle::DEFAULT_MAX_AGE_SECONDS`.
+than `PYTH_MAX_AGE_SECONDS`. Defaults to 300 s on devnet (the on-chain
+cap in `oracle::DEFAULT_MAX_AGE_SECONDS` is 600 s; devnet publishers
+push intermittently — mainnet would tighten both back toward ~60 s).
 
 ## Raydium CPMM happy path: devnet pool
 
@@ -107,6 +108,31 @@ To exercise the end-to-end loop:
 pnpm exec ts-node --transpile-only scripts/create_raydium_pool.ts
 MOCK_MPC=true pnpm --filter agent start
 ```
+
+### Pool drift and the auto-rebalancer (devnet only)
+
+Each agent trade shifts the pool's implied price; on mainnet,
+arbitrageurs immediately tighten it back to the global price, so the
+agent's on-chain Pyth-floor (`MAX_SLIPPAGE_BPS=1000`, programs/spectraq_
+vault/src/instructions/execute_trade.rs:154) never binds. On devnet
+there are no arbitrageurs — left alone, after a few same-direction
+trades the pool drifts >10 % off Pyth and **every subsequent trade
+fails the Pyth-floor check until something rebalances the pool**.
+
+`scripts/rebalance_pool.ts` is a developer-side daemon that does this
+automatically: it polls pool reserves + Pyth, and when the gap exceeds
+`REBALANCE_TOLERANCE_BPS` (default 1 %), it executes a small
+USDC→SOL or SOL→USDC swap from the operator's wallet to push the pool
+back in band. `scripts/demo.sh` starts it in step 10 alongside the
+agent and frontend; skip with `--no-rebalancer`. The rebalancer wallet
+is independent from the vault and the agent — it's purely operational
+hygiene, not part of the trust boundary (see SECURITY.md).
+
+When running the agent without the rebalancer (e.g. in `tests/`), expect
+trade success rate to fall after a handful of same-direction signals.
+The agent itself reads on-chain Pyth and clamps `min_amount_out` against
+the Pyth-floor (`agent/src/trader.ts::readPythSolUsdE6`), so failures
+are clean rejections rather than bad fills.
 
 ## Logging & secrets
 

@@ -11,7 +11,10 @@
 #   7. register Raydium CPMM pool (idempotent — uses existing pool if any)
 #   8. start agent in MOCK_MPC mode (Arcium devnet callbacks are flaky)
 #   9. start frontend in dev mode
-#  10. echo URLs + explorer links
+#  10. start Raydium pool auto-rebalancer (keeps pool implied price in
+#      sync with Pyth so the on-chain Pyth-floor doesn't block trades —
+#      devnet substitute for mainnet's natural arbitrage)
+#  11. echo URLs + explorer links
 #
 # Logs go to logs/demo_run_<unix_ts>.log. Tail it for live status:
 #   tail -f logs/demo_run_*.log
@@ -19,11 +22,12 @@
 # Stop the demo with: bash scripts/demo.sh --stop
 #
 # Flags:
-#   --rebuild   force `anchor build && anchor deploy` even if program exists
-#   --reinit    force re-running scripts/init-mxe.sh
-#   --no-agent  don't start the trading agent
-#   --no-fe     don't start the frontend
-#   --stop      kill any agent/frontend started by previous demo runs
+#   --rebuild         force `anchor build && anchor deploy` even if program exists
+#   --reinit          force re-running scripts/init-mxe.sh
+#   --no-agent        don't start the trading agent
+#   --no-fe           don't start the frontend
+#   --no-rebalancer   don't start the pool auto-rebalancer
+#   --stop            kill any agent/frontend/rebalancer from previous runs
 
 set -euo pipefail
 
@@ -45,14 +49,15 @@ err()  { printf "%s✗%s %s\n" "$C_RED" "$C_RST" "$1" | tee -a "$LOG_FILE"; }
 PIDS_DIR="$ROOT/.demo-pids"
 mkdir -p "$PIDS_DIR"
 
-REBUILD=0; REINIT=0; START_AGENT=1; START_FE=1; STOP=0
+REBUILD=0; REINIT=0; START_AGENT=1; START_FE=1; START_REBALANCER=1; STOP=0
 for arg in "$@"; do
   case "$arg" in
-    --rebuild)  REBUILD=1 ;;
-    --reinit)   REINIT=1 ;;
-    --no-agent) START_AGENT=0 ;;
-    --no-fe)    START_FE=0 ;;
-    --stop)     STOP=1 ;;
+    --rebuild)        REBUILD=1 ;;
+    --reinit)         REINIT=1 ;;
+    --no-agent)       START_AGENT=0 ;;
+    --no-fe)          START_FE=0 ;;
+    --no-rebalancer)  START_REBALANCER=0 ;;
+    --stop)           STOP=1 ;;
     -h|--help)
       sed -n '2,30p' "$0"
       exit 0
@@ -95,7 +100,25 @@ if [[ -f .env ]]; then
 fi
 
 PROGRAM_ID="${SPECTRAQ_PROGRAM_ID:-96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN}"
-RPC_URL="${HELIUS_RPC_URL:-https://api.devnet.solana.com}"
+PUBLIC_DEVNET_RPC="https://api.devnet.solana.com"
+RPC_URL="${HELIUS_RPC_URL:-$PUBLIC_DEVNET_RPC}"
+# Heuristic + active probe: if HELIUS_RPC_URL still has the literal
+# `${HELIUS_API_KEY}` placeholder, or if the key is rejected with HTTP 401
+# (e.g. revoked), fall back to public devnet so the rest of the demo is
+# usable. Skip the probe when the user is already on public devnet.
+if [[ "$RPC_URL" == *'${HELIUS_API_KEY}'* ]]; then
+  warn "HELIUS_RPC_URL still references unresolved \${HELIUS_API_KEY} — using public devnet"
+  RPC_URL="$PUBLIC_DEVNET_RPC"
+elif [[ "$RPC_URL" != "$PUBLIC_DEVNET_RPC" ]]; then
+  PROBE_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+    "$RPC_URL" 2>/dev/null || echo "000")
+  if [[ "$PROBE_HTTP" == "401" || "$PROBE_HTTP" == "403" || "$PROBE_HTTP" == "000" ]]; then
+    warn "HELIUS_RPC_URL probe returned $PROBE_HTTP — falling back to public devnet"
+    RPC_URL="$PUBLIC_DEVNET_RPC"
+  fi
+fi
 # Program upgrade authority (used by anchor deploy + init-mxe.sh).
 DEPLOY_KEYPAIR="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 # Vault admin (separate identity so the upgrade authority isn't the same
@@ -112,7 +135,7 @@ log "admin keypair  : $ADMIN_KEYPAIR  (vault admin)"
 log "agent keypair  : $AGENT_KEYPAIR"
 
 # ─── Step 1: preflight ─────────────────────────────────────────────────────
-hdr "1/10 preflight"
+hdr "1/11 preflight"
 if bash scripts/preflight.sh >>"$LOG_FILE" 2>&1; then
   ok "preflight passed"
 else
@@ -120,7 +143,7 @@ else
 fi
 
 # ─── Step 2: anchor build + deploy (idempotent) ────────────────────────────
-hdr "2/10 anchor build + deploy"
+hdr "2/11 anchor build + deploy"
 PROGRAM_ON_CHAIN=0
 if solana --url "$RPC_URL" account "$PROGRAM_ID" >/dev/null 2>&1; then
   PROGRAM_ON_CHAIN=1
@@ -136,7 +159,7 @@ else
 fi
 
 # ─── Step 3: init-mxe (idempotent) ────────────────────────────────────────
-hdr "3/10 Arcium MXE registration"
+hdr "3/11 Arcium MXE registration"
 MXE_EXISTS=0
 if solana --url "$RPC_URL" account "$MXE_PUBKEY" >/dev/null 2>&1; then
   MXE_EXISTS=1
@@ -153,7 +176,7 @@ else
 fi
 
 # ─── Step 4: ensure admin + agent keypairs ────────────────────────────────
-hdr "4/10 vault admin + agent keypairs"
+hdr "4/11 vault admin + agent keypairs"
 if [[ ! -f "$ADMIN_KEYPAIR" ]]; then
   log "generating vault admin keypair at $ADMIN_KEYPAIR"
   solana-keygen new --no-bip39-passphrase --silent --outfile "$ADMIN_KEYPAIR" >>"$LOG_FILE" 2>&1
@@ -197,8 +220,8 @@ ok "vault admin    : $ADMIN_PK"
 ok "agent          : $AGENT_PK"
 
 # ─── Step 5: initialize_vault (idempotent) ────────────────────────────────
-hdr "5/10 initialize_vault"
-ANCHOR_WALLET="$ADMIN_KEYPAIR" AGENT_KEYPAIR_PATH="$AGENT_KEYPAIR" \
+hdr "5/11 initialize_vault"
+ANCHOR_WALLET="$ADMIN_KEYPAIR" AGENT_KEYPAIR_PATH="$AGENT_KEYPAIR" HELIUS_RPC_URL="$RPC_URL" \
   pnpm exec ts-node --transpile-only scripts/initialize_vault.ts 2>&1 | tee -a "$LOG_FILE" \
   || { err "initialize_vault failed"; exit 1; }
 
@@ -209,8 +232,29 @@ if [[ -f .env.demo ]]; then
   set +a
 fi
 
-# Wire frontend to the live vault. Without this the dashboard reads a
-# stale default admin pubkey and silently shows "vault not found".
+# ─── Step 6: seed demo funds ──────────────────────────────────────────────
+hdr "6/11 seed demo funds (10 USDC + 0.1 SOL)"
+if ANCHOR_WALLET="$ADMIN_KEYPAIR" HELIUS_RPC_URL="$RPC_URL" pnpm exec ts-node --transpile-only scripts/seed_demo_funds.ts 2>&1 | tee -a "$LOG_FILE"; then
+  ok "demo deposits complete"
+else
+  warn "seed step had issues (see $LOG_FILE) — continuing so the demo can still surface vault state"
+fi
+
+# ─── Step 7: register Raydium CPMM pool (idempotent) ──────────────────────
+hdr "7/11 Raydium CPMM pool registration"
+if ANCHOR_WALLET="$DEPLOY_KEYPAIR" HELIUS_RPC_URL="$RPC_URL" pnpm exec ts-node --transpile-only scripts/create_raydium_pool.ts 2>&1 | tee -a "$LOG_FILE"; then
+  ok "Raydium pool wired in .env (RAYDIUM_USDC_SOL_POOL)"
+  # Reload .env so subsequent steps see the freshly-written RAYDIUM_* vars.
+  set -a; source .env; set +a
+else
+  err "Raydium pool registration failed — agent will not be able to swap"
+  warn "continuing (vault deposit/withdraw still works) — see $LOG_FILE"
+fi
+
+# Wire frontend to the live vault + Raydium pool. Done AFTER step 7 so the
+# RAYDIUM_* vars (just written by create_raydium_pool.ts) are populated.
+# Without this, /api/vault shows "vault not found" and /api/raydium-pool
+# returns errored: "Raydium pool not configured".
 FE_ENV="$ROOT/frontend/.env.local"
 {
   echo "# auto-generated by scripts/demo.sh — do not edit by hand"
@@ -222,43 +266,38 @@ FE_ENV="$ROOT/frontend/.env.local"
   echo "NEXT_PUBLIC_PYTH_SOL_USD_FEED=${PYTH_SOL_USD_FEED:-7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE}"
   echo "SOLANA_RPC_URL=$RPC_URL"
   echo "PYTH_SOL_USD_FEED=${PYTH_SOL_USD_FEED:-7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE}"
+  # Raydium CPMM pool (server-side; consumed by /api/raydium-pool route).
+  echo "RAYDIUM_CPMM_PROGRAM_ID=${RAYDIUM_CPMM_PROGRAM_ID:-DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb}"
+  echo "RAYDIUM_CPMM_POOL_AUTH=${RAYDIUM_CPMM_POOL_AUTH:-}"
+  echo "RAYDIUM_USDC_SOL_POOL=${RAYDIUM_USDC_SOL_POOL:-}"
+  echo "RAYDIUM_USDC_SOL_LP_MINT=${RAYDIUM_USDC_SOL_LP_MINT:-}"
+  echo "RAYDIUM_USDC_SOL_VAULT_A=${RAYDIUM_USDC_SOL_VAULT_A:-}"
+  echo "RAYDIUM_USDC_SOL_VAULT_B=${RAYDIUM_USDC_SOL_VAULT_B:-}"
+  echo "RAYDIUM_USDC_SOL_CONFIG_ID=${RAYDIUM_USDC_SOL_CONFIG_ID:-}"
+  echo "RAYDIUM_USDC_SOL_OBSERVATION=${RAYDIUM_USDC_SOL_OBSERVATION:-}"
+  echo "RAYDIUM_USDC_SOL_MINT_A=${RAYDIUM_USDC_SOL_MINT_A:-}"
+  echo "RAYDIUM_USDC_SOL_MINT_B=${RAYDIUM_USDC_SOL_MINT_B:-}"
 } > "$FE_ENV"
 ok "wrote $FE_ENV (vault admin = ${ADMIN_PUBKEY:-$ADMIN_PK})"
 
-# ─── Step 6: seed demo funds ──────────────────────────────────────────────
-hdr "6/10 seed demo funds (10 USDC + 0.1 SOL)"
-if ANCHOR_WALLET="$ADMIN_KEYPAIR" pnpm exec ts-node --transpile-only scripts/seed_demo_funds.ts 2>&1 | tee -a "$LOG_FILE"; then
-  ok "demo deposits complete"
-else
-  warn "seed step had issues (see $LOG_FILE) — continuing so the demo can still surface vault state"
-fi
-
-# ─── Step 7: register Raydium CPMM pool (idempotent) ──────────────────────
-hdr "7/10 Raydium CPMM pool registration"
-if ANCHOR_WALLET="$DEPLOY_KEYPAIR" pnpm exec ts-node --transpile-only scripts/create_raydium_pool.ts 2>&1 | tee -a "$LOG_FILE"; then
-  ok "Raydium pool wired in .env (RAYDIUM_USDC_SOL_POOL)"
-  # Reload .env so subsequent steps see the freshly-written RAYDIUM_* vars.
-  set -a; source .env; set +a
-else
-  err "Raydium pool registration failed — agent will not be able to swap"
-  warn "continuing (vault deposit/withdraw still works) — see $LOG_FILE"
-fi
-
 # ─── Step 8: start agent (MOCK_MPC=true) ──────────────────────────────────
-hdr "8/10 trading agent"
+hdr "8/11 trading agent"
 if [[ $START_AGENT -eq 1 ]]; then
   AGENT_LOG="$LOG_DIR/agent_${RUN_TS}.log"
   log "starting agent → $AGENT_LOG"
-  ( cd "$ROOT" && MOCK_MPC=true pnpm --filter agent start >"$AGENT_LOG" 2>&1 ) &
+  # Pass the resolved $RPC_URL through so the agent uses the same probed/
+  # fallback URL as the rest of the demo (avoids it inheriting a broken
+  # HELIUS_RPC_URL from .env at process spawn time).
+  ( cd "$ROOT" && MOCK_MPC=true HELIUS_RPC_URL="$RPC_URL" pnpm --filter agent start >"$AGENT_LOG" 2>&1 ) &
   AGENT_PID=$!
   echo "$AGENT_PID" >"$PIDS_DIR/agent.pid"
-  ok "agent pid=$AGENT_PID  (MOCK_MPC=true)"
+  ok "agent pid=$AGENT_PID  (MOCK_MPC=true, RPC=$RPC_URL)"
 else
   warn "skipped (--no-agent)"
 fi
 
 # ─── Step 9: start frontend ───────────────────────────────────────────────
-hdr "9/10 frontend"
+hdr "9/11 frontend"
 if [[ $START_FE -eq 1 ]]; then
   FE_LOG="$LOG_DIR/frontend_${RUN_TS}.log"
   FE_PORT="${FE_PORT:-3000}"
@@ -271,8 +310,35 @@ else
   warn "skipped (--no-fe)"
 fi
 
-# ─── Step 10: summary ─────────────────────────────────────────────────────
-hdr "10/10 demo summary"
+# ─── Step 10: pool auto-rebalancer ─────────────────────────────────────────
+# Keeps the Raydium CPMM pool's implied SOL/USDC price within
+# REBALANCE_TOLERANCE_BPS (default 1%) of Pyth, so the on-chain Pyth-floor
+# in execute_trade.rs never blocks the agent. Devnet substitute for
+# mainnet's natural arbitrage. Runs as a daemon polling every 60s; uses
+# the funded deploy wallet (which has both SOL and USDC). The script is
+# wallet-agnostic via ANCHOR_WALLET, so override if you want.
+hdr "10/11 Raydium pool auto-rebalancer"
+if [[ $START_REBALANCER -eq 1 ]]; then
+  REB_LOG="$LOG_DIR/rebalancer_${RUN_TS}.log"
+  log "starting rebalancer (loop, every ${REBALANCE_INTERVAL_SEC:-60}s) → $REB_LOG"
+  ( cd "$ROOT" && \
+      ANCHOR_WALLET="${REBALANCE_WALLET:-$DEPLOY_KEYPAIR}" \
+      HELIUS_RPC_URL="$RPC_URL" \
+      REBALANCE_LOOP=true \
+      INTERVAL_SEC="${REBALANCE_INTERVAL_SEC:-60}" \
+      REBALANCE_TOLERANCE_BPS="${REBALANCE_TOLERANCE_BPS:-100}" \
+      MAX_REBALANCE_USDC="${MAX_REBALANCE_USDC:-200}" \
+      pnpm exec ts-node --transpile-only scripts/rebalance_pool.ts \
+      >"$REB_LOG" 2>&1 ) &
+  REB_PID=$!
+  echo "$REB_PID" >"$PIDS_DIR/rebalancer.pid"
+  ok "rebalancer pid=$REB_PID  (wallet=${REBALANCE_WALLET:-$DEPLOY_KEYPAIR})"
+else
+  warn "skipped (--no-rebalancer)"
+fi
+
+# ─── Step 11: summary ─────────────────────────────────────────────────────
+hdr "11/11 demo summary"
 VAULT_PK="${VAULT_PUBKEY:-?}"
 SHARE_MINT_PK="${SHARE_MINT_PUBKEY:-?}"
 log ""
@@ -282,11 +348,16 @@ log "  ${C_GRN}share mint${C_RST}  https://explorer.solana.com/address/$SHARE_MI
 log "  ${C_GRN}MXE${C_RST}         https://explorer.solana.com/address/$MXE_PUBKEY?cluster=devnet"
 log ""
 log "  ${C_GRN}frontend${C_RST}    http://localhost:${FE_PORT:-3000}"
+log "  ${C_GRN}dashboard${C_RST}   http://localhost:${FE_PORT:-3000}/app"
+log "  ${C_GRN}deposit${C_RST}     http://localhost:${FE_PORT:-3000}/app/deposit"
+log "  ${C_GRN}withdraw${C_RST}    http://localhost:${FE_PORT:-3000}/app/withdraw"
+log "  ${C_GRN}pool${C_RST}        http://localhost:${FE_PORT:-3000}/app/pool"
 log "  ${C_GRN}strategy${C_RST}    http://localhost:${FE_PORT:-3000}/strategy"
 log ""
-log "  agent log    $LOG_DIR/agent_${RUN_TS}.log"
-log "  frontend log $LOG_DIR/frontend_${RUN_TS}.log"
-log "  full log     $LOG_FILE"
+log "  agent log      $LOG_DIR/agent_${RUN_TS}.log"
+log "  frontend log   $LOG_DIR/frontend_${RUN_TS}.log"
+log "  rebalancer log $LOG_DIR/rebalancer_${RUN_TS}.log"
+log "  full log       $LOG_FILE"
 log ""
 log "  stop with: bash scripts/demo.sh --stop"
 log ""
