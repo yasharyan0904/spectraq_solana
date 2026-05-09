@@ -9,10 +9,11 @@ import { Logo } from "./Logo";
 
 const NAV = [
   { href: "/app", label: "Dashboard" },
+  { href: "/app/marketplace", label: "Marketplace", highlight: true },
   { href: "/app/deposit", label: "Deposit" },
   { href: "/app/withdraw", label: "Withdraw" },
-  { href: "/app/pool", label: "Pool" },
   { href: "/app/arcium", label: "Arcium" },
+  { href: "/app/launch", label: "Launch vault" },
   { href: "/strategy", label: "Strategy" },
 ];
 
@@ -20,20 +21,41 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Glassmorphism header with gradient bottom border */}
       <header className="sticky top-0 z-30 glass" style={{
         borderBottom: "1px solid transparent",
         backgroundImage:
-          "linear-gradient(rgba(12, 12, 22, 0.85), rgba(12, 12, 22, 0.85)), linear-gradient(90deg, rgba(139,92,246,0.25), rgba(34,211,238,0.12), rgba(139,92,246,0.08))",
+          "linear-gradient(rgba(12, 12, 22, 0.88), rgba(12, 12, 22, 0.88)), linear-gradient(90deg, rgba(139,92,246,0.28), rgba(34,211,238,0.12), rgba(139,92,246,0.08))",
         backgroundOrigin: "border-box",
         backgroundClip: "padding-box, border-box",
       }}>
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4">
-          <div className="flex items-center gap-7">
+          <div className="flex items-center gap-6">
             <Logo />
-            <nav className="hidden items-center gap-1 md:flex">
+            <nav className="hidden items-center gap-0.5 md:flex">
               {NAV.map((n) => {
                 const active = pathname === n.href;
+                if (n.label === "Launch vault") {
+                  return (
+                    <Link
+                      key={n.href}
+                      href={n.href}
+                      className={`ml-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200 ${
+                        active
+                          ? "text-[var(--color-text)]"
+                          : "text-[var(--color-brand)] hover:text-[var(--color-text)]"
+                      }`}
+                      style={active ? {
+                        background: "rgba(139, 92, 246, 0.15)",
+                        border: "1px solid rgba(139, 92, 246, 0.3)",
+                      } : {
+                        border: "1px solid rgba(139, 92, 246, 0.25)",
+                        background: "rgba(139, 92, 246, 0.06)",
+                      }}
+                    >
+                      + {n.label}
+                    </Link>
+                  );
+                }
                 return (
                   <Link
                     key={n.href}
@@ -69,9 +91,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   key={n.href}
                   href={n.href}
                   className={`whitespace-nowrap rounded-md px-3 py-1.5 text-xs transition-all ${
-                    active
-                      ? "text-[var(--color-text)]"
-                      : "text-[var(--color-muted)]"
+                    active ? "text-[var(--color-text)]" : "text-[var(--color-muted)]"
                   }`}
                   style={active ? {
                     background: "rgba(139, 92, 246, 0.12)",
@@ -87,17 +107,23 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </nav>
       </header>
+
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:py-10">{children}</main>
-      <footer className="border-t border-[var(--color-border)] py-6 text-center text-[11px]">
-        <span className="text-[var(--color-muted)]">SpectraQ · non-custodial vault on Solana · </span>
-        <a
-          className="text-[var(--color-brand)] opacity-70 hover:opacity-100 transition-opacity"
-          href="https://github.com/anza-xyz/agave"
-          target="_blank"
-          rel="noreferrer"
-        >
-          devnet
-        </a>
+
+      <footer style={{ borderTop: "1px solid var(--color-border)" }} className="py-6 text-center text-[11px]">
+        <div className="mx-auto flex max-w-6xl items-center justify-center gap-6 px-4 flex-wrap">
+          <span className="text-[var(--color-muted)]">SpectraQ · The Shopify for Quants · Solana devnet</span>
+          <span
+            className="rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-widest"
+            style={{
+              background: "rgba(16, 217, 140, 0.08)",
+              border: "1px solid rgba(16, 217, 140, 0.25)",
+              color: "var(--color-positive)",
+            }}
+          >
+            Frontier Colosseum 2026
+          </span>
+        </div>
       </footer>
     </div>
   );
