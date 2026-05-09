@@ -6,6 +6,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import * as anchor from "@coral-xyz/anchor";
@@ -73,10 +74,20 @@ export function useWithdraw() {
         );
       }
 
+      // After withdraw, close the wSOL ATA so the vault's wSOL payout is
+      // automatically unwrapped back into native SOL (lamports) for the user.
+      const closeWsolIx = createCloseAccountInstruction(
+        userSol,    // wSOL ATA to close
+        publicKey,  // lamports destination = user's wallet
+        publicKey,  // authority
+      );
+
       const builder = (
         program.methods as Record<string, (...a: unknown[]) => {
           accounts: (a: unknown) => {
-            preInstructions: (ix: unknown[]) => { rpc: () => Promise<string> };
+            preInstructions: (ix: unknown[]) => {
+              postInstructions: (ix: unknown[]) => { rpc: () => Promise<string> };
+            };
           };
         }>
       )
@@ -96,7 +107,8 @@ export function useWithdraw() {
           tokenProgram: TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         })
-        .preInstructions(preIxs);
+        .preInstructions(preIxs)
+        .postInstructions([closeWsolIx]);
 
       const signature: string = await builder.rpc();
       return { signature };

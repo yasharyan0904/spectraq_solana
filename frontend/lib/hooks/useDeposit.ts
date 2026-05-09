@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import {
   PublicKey,
   SystemProgram,
@@ -10,6 +10,9 @@ import {
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
+  createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import * as anchor from "@coral-xyz/anchor";
@@ -45,6 +48,7 @@ export interface DepositResult {
 export function useDeposit() {
   const program = useAnchorProgram();
   const { publicKey } = useWallet();
+  const { connection } = useConnection();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -83,20 +87,32 @@ export function useDeposit() {
         const solVault = getAssociatedTokenAddressSync(WSOL_MINT, vault, true);
         const userSol = getAssociatedTokenAddressSync(WSOL_MINT, publicKey);
         const userShares = getAssociatedTokenAddressSync(shareMint, publicKey);
-        // SOL deposits need a fresh price from Pyth — the vault expects
-        // a `price_update` account. The vault PDAs/feeds are wired via
-        // the env config; we let the program pick them via remaining_accounts
-        // when called by the agent. For UX simplicity in this build,
-        // SOL deposits go through the same Pyth account already seeded
-        // in the vault initialization. We pass the wSOL ATA here as a
-        // user-readable confirmation; the actual Pyth feed is resolved
-        // server-side by the price-update account configured at vault
-        // init time.
         const pythAccount = new PublicKey(
           process.env.NEXT_PUBLIC_PYTH_SOL_USD_FEED ??
             "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
         );
-        signature = await (program.methods as Record<string, (...a: unknown[]) => { accounts: (a: unknown) => { rpc: () => Promise<string> } }>)
+
+        // Wrap native SOL into the user's wSOL ATA before depositing, then
+        // close the ATA afterward so no leftover wSOL token sits in the wallet.
+        const solInfo = await connection.getAccountInfo(userSol);
+        const preIxs = [];
+        if (!solInfo) {
+          preIxs.push(
+            createAssociatedTokenAccountIdempotentInstruction(
+              publicKey, userSol, publicKey, WSOL_MINT,
+            ),
+          );
+        }
+        // Transfer lamports into the wSOL ATA then sync so the token balance reflects it.
+        preIxs.push(
+          SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: userSol, lamports: Number(amount) }),
+          createSyncNativeInstruction(userSol),
+        );
+
+        // After deposit, close the wSOL ATA to keep the wallet clean.
+        const closeWsolIx = createCloseAccountInstruction(userSol, publicKey, publicKey);
+
+        signature = await (program.methods as Record<string, (...a: unknown[]) => { accounts: (a: unknown) => { preInstructions: (ix: unknown[]) => { postInstructions: (ix: unknown[]) => { rpc: () => Promise<string> } } } }>)
           .depositSol(new anchor.BN(amount.toString()))
           .accounts({
             user: publicKey,
@@ -113,6 +129,8 @@ export function useDeposit() {
             systemProgram: SystemProgram.programId,
             rent: SYSVAR_RENT_PUBKEY,
           })
+          .preInstructions(preIxs)
+          .postInstructions([closeWsolIx])
           .rpc();
       }
       return { signature };
