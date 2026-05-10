@@ -44,3 +44,8 @@ logs/
 
 # Anchor IDL leftovers
 **/*.so
+
+.claude/
+*.txt
+DEMO_SCRIPT.md
+README.md
