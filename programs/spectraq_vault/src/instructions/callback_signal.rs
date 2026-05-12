@@ -4,9 +4,10 @@
 // non-pub helper by `#[arcium_program]` and is therefore only in scope inside
 // that module.
 //
-// `#[callback_accounts]` auto-generates `ComputeMaSignalOutput` from the
-// circuit's ABI in `build/compute_ma_signal.arcis`. For our circuit (returns
-// a single `i8`), the generated struct is `{ field_0: i8 }`.
+// `#[callback_accounts]` auto-generates `ComputeMaSignalV3Output` from the
+// circuit's ABI in `build/compute_ma_signal_v3.arcis` — pascal-case of the
+// circuit name plus `Output`. The generated struct is `{ field_0: bool }`.
+// We map `true` → `1` and `false` → `0` for vault.last_signal.
 
 use anchor_lang::prelude::*;
 use arcium_anchor::prelude::*;
@@ -17,9 +18,9 @@ use crate::events::SignalReceived;
 use crate::state::{SignalState, VaultState};
 use crate::{ID, ID_CONST};
 
-#[callback_accounts("compute_ma_signal")]
+#[callback_accounts("compute_ma_signal_v3")]
 #[derive(Accounts)]
-pub struct ComputeMaSignalCallback<'info> {
+pub struct ComputeMaSignalV3Callback<'info> {
     pub arcium_program: Program<'info, Arcium>,
     #[account(
         address = derive_comp_def_pda!(crate::COMP_DEF_OFFSET_COMPUTE_MA_SIGNAL)
@@ -50,23 +51,23 @@ pub struct ComputeMaSignalCallback<'info> {
 /// Body of the Arcium callback. Verifies the cluster's BLS signature on the
 /// output, then commits the plaintext signal to vault state.
 pub fn apply_signal(
-    ctx: Context<ComputeMaSignalCallback>,
-    output: SignedComputationOutputs<ComputeMaSignalOutput>,
+    ctx: Context<ComputeMaSignalV3Callback>,
+    output: SignedComputationOutputs<ComputeMaSignalV3Output>,
 ) -> Result<()> {
-    let signal_i8 = match output
+    let signal_bool = match output
         .verify_output(&ctx.accounts.cluster_account, &ctx.accounts.computation_account)
     {
-        Ok(ComputeMaSignalOutput { field_0 }) => field_0,
+        Ok(ComputeMaSignalV3Output { field_0 }) => field_0,
         Err(_) => return Err(ErrorCode::AbortedComputation.into()),
     };
+
+    // Map the cluster's revealed bool → i8 for the existing vault schema.
+    // v1 is long-only: true = trade (1), false = no trade (0). -1 is reserved.
+    let signal_i8: i8 = if signal_bool { 1 } else { 0 };
 
     let vault = &mut ctx.accounts.vault_state;
     require!(
         vault.signal_state == SignalState::Pending,
-        VaultError::InvalidSignalState
-    );
-    require!(
-        signal_i8 == -1 || signal_i8 == 0 || signal_i8 == 1,
         VaultError::InvalidSignalState
     );
 

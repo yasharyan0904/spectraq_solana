@@ -31,7 +31,7 @@ use crate::{ArciumSignerAccount, ID, ID_CONST};
 const PRICE_CT_LEN: usize = 17;
 const PARAM_CT_LEN: usize = 3;
 
-#[queue_computation_accounts("compute_ma_signal", payer)]
+#[queue_computation_accounts("compute_ma_signal_v3", payer)]
 #[derive(Accounts)]
 #[instruction(computation_offset: u64)]
 pub struct RequestSignalComputation<'info> {
@@ -134,7 +134,7 @@ pub fn request_signal_computation_handler(
         ctx.accounts,
         computation_offset,
         args,
-        vec![crate::ComputeMaSignalCallback::callback_ix(
+        vec![crate::ComputeMaSignalV3Callback::callback_ix(
             computation_offset,
             &ctx.accounts.mxe_account,
             &[CallbackAccount {

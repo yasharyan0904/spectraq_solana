@@ -1,15 +1,15 @@
-// Init the on-chain ComputationDefinitionAccount for the `compute_ma_signal`
-// circuit. Must run AFTER `arcium init-mxe` (the cluster's MXE registration)
-// but BEFORE the first `request_signal_computation` call. Idempotent —
-// subsequent calls fail with an account-already-exists error and the demo
-// script swallows that.
+// Init the on-chain ComputationDefinitionAccount for the
+// `compute_ma_signal_v3` circuit. Must run AFTER `arcium init-mxe` (the
+// cluster's MXE registration) but BEFORE the first `request_signal_computation`
+// call. Idempotent — subsequent calls fail with an account-already-exists
+// error and the demo script swallows that.
 
 use anchor_lang::prelude::*;
 use arcium_anchor::prelude::*;
 
 use crate::{ID, ID_CONST};
 
-#[init_computation_definition_accounts("compute_ma_signal", payer)]
+#[init_computation_definition_accounts("compute_ma_signal_v3", payer)]
 #[derive(Accounts)]
 pub struct InitMaSignalCompDef<'info> {
     #[account(mut)]

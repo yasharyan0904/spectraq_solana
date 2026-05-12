@@ -22,5 +22,7 @@ spectraq_vault = "96fHw6FzHUB8gAPPUUWRpyZuWo2NRPHJtJYcm7ERfugN"
 
 [circuits]
 # Built by `arcium build --skip-program` (see prompt 2).
-# Uploaded to the cluster in prompt 3 via `arcium upload-circuits`.
-compute_ma_signal = { path = "build/compute_ma_signal.arcis" }
+# Uploaded to the cluster via `scripts/upload_arcium_circuit.ts`.
+# v2 returns `bool` (was `i8`); circuit was renamed because Arcium 0.9.7
+# has no in-place comp-def-update path — we needed a fresh PDA.
+compute_ma_signal_v3 = { path = "build/compute_ma_signal_v3.arcis" }

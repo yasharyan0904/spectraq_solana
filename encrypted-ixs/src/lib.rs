@@ -1,4 +1,4 @@
-// SpectraQ — Arcis MPC circuit (compute_ma_signal).
+// SpectraQ — Arcis MPC circuit (compute_ma_signal_v3).
 //
 // Arcis hard constraints honored here:
 //   - Loop bounds are compile-time `const` literals (FAST_N, SLOW_N, WINDOW).
@@ -7,8 +7,18 @@
 //   - Division avoided via cross-multiplication: comparing `fast_avg > slow_avg`
 //     becomes `fast_sum * SLOW_N > slow_sum * FAST_N`.
 //
-// Output: a plaintext `i8` (revealed in MPC). v1 is long-only — values
-// returned are 0 (no signal) or +1 (cross). -1 is reserved.
+// Output: a plaintext `bool` revealed by the cluster.  v2 returns `true` when
+// the fast MA crosses above the slow MA + threshold (= "trade") and `false`
+// otherwise (= "no trade"). The on-chain callback maps `bool` → `i8` (0/1) so
+// the existing vault state schema is unchanged.
+//
+// Why bool, not i8?  The v1 form `if left > right { 1 } else { 0 }.reveal()`
+// went through an MPC select on i8 literals, which on devnet produced
+// asymmetric reveal failures — `true` would occasionally decrypt as `0`
+// while `false` was always `0`. Revealing the underlying `bool` skips the
+// select step. v2 ships with a different circuit name so it gets a fresh
+// on-chain ComputationDefinition (the previous one is finalized with the
+// v1 hash; Arcium 0.9.7 has no in-place update path).
 
 use arcis::*;
 
@@ -32,13 +42,6 @@ mod circuits {
         pub threshold_bps: i16,
     }
 
-    /// Forward-compat output struct. Not used as the return type in v1 — the
-    /// instruction returns a revealed `i8` directly so `callback_signal` on
-    /// the vault program can read it as plaintext.
-    pub struct SignalOutput {
-        pub signal: i8,
-    }
-
     /// MA-crossover signal.
     ///
     /// Inputs:
@@ -48,8 +51,8 @@ mod circuits {
     ///     1232-byte instruction-data limit.
     ///   - `params_ctxt`: strategy params encrypted under the MXE key.
     ///
-    /// Output: revealed `i8` — `1` if `fast_ma > slow_ma * (1 + th/10000)`,
-    /// `0` otherwise. Mode 1 never returns `-1`.
+    /// Output: revealed `bool` — `true` if `fast_ma > slow_ma * (1 + th/10000)`,
+    /// `false` otherwise. The on-chain callback converts to `i8` for vault state.
     ///
     /// Cross-multiplication form (no division):
     ///   fast_avg > slow_avg * (1 + th/10000)
@@ -58,10 +61,10 @@ mod circuits {
     /// Magnitudes: u64 prices, fixed multipliers under 10^6 — products stay
     /// well within u128 range (worst-case ~10^26 vs limit ~3.4×10^38).
     #[instruction]
-    pub fn compute_ma_signal(
+    pub fn compute_ma_signal_v3(
         prices_ctxt: Enc<Shared, Pack<[u64; 50]>>,
         params_ctxt: Enc<Mxe, StrategyParams>,
-    ) -> i8 {
+    ) -> bool {
         let prices = prices_ctxt.to_arcis().unpack();
         let params = params_ctxt.to_arcis();
 
@@ -92,8 +95,8 @@ mod circuits {
         let left: u128 = fast_sum * (SLOW_N as u128) * 10_000u128;
         let right: u128 = slow_sum * (FAST_N as u128) * factor;
 
-        let signal: i8 = if left > right { 1 } else { 0 };
-        signal.reveal()
+        // Reveal the underlying bool directly, no i8 select step.
+        (left > right).reveal()
     }
 }
 
@@ -104,7 +107,7 @@ mod circuits {
 // any change to one MUST be mirrored in the other.
 // ----------------------------------------------------------------------------
 #[doc(hidden)]
-pub fn ma_signal_reference(prices: &[u64; 50], threshold_bps: i16) -> i8 {
+pub fn ma_signal_reference(prices: &[u64; 50], threshold_bps: i16) -> bool {
     const WINDOW: usize = 50;
     const FAST_N: usize = 10;
     const SLOW_N: usize = 30;
@@ -124,7 +127,7 @@ pub fn ma_signal_reference(prices: &[u64; 50], threshold_bps: i16) -> i8 {
     let left: u128 = fast_sum * (SLOW_N as u128) * 10_000u128;
     let right: u128 = slow_sum * (FAST_N as u128) * factor;
 
-    if left > right { 1 } else { 0 }
+    left > right
 }
 
 #[cfg(test)]
@@ -132,32 +135,32 @@ mod tests {
     use super::ma_signal_reference;
 
     /// Build a price series whose last FAST_N (=10) closes sit clearly above
-    /// the older SLOW_N-FAST_N (=20) closes. Expect signal = 1.
+    /// the older SLOW_N-FAST_N (=20) closes. Expect signal = true.
     #[test]
-    fn rising_prices_yield_signal_1() {
+    fn rising_prices_yield_true() {
         let mut prices = [100_000_000u64; 50]; // 100.0 USDC/SOL baseline
         for i in 40..50 {
             prices[i] = 120_000_000 + (i as u64 - 40) * 1_000_000;
         }
-        assert_eq!(ma_signal_reference(&prices, 0), 1);
+        assert!(ma_signal_reference(&prices, 0));
     }
 
     /// Flat series: fast == slow exactly, so `left == right` and the strict
-    /// `>` returns 0.
+    /// `>` returns false.
     #[test]
-    fn flat_prices_yield_signal_0() {
+    fn flat_prices_yield_false() {
         let prices = [100_000_000u64; 50];
-        assert_eq!(ma_signal_reference(&prices, 0), 0);
+        assert!(!ma_signal_reference(&prices, 0));
     }
 
     /// Declining series: most-recent FAST_N closes are below the older window.
     #[test]
-    fn declining_prices_yield_signal_0() {
+    fn declining_prices_yield_false() {
         let mut prices = [120_000_000u64; 50];
         for i in 40..50 {
             prices[i] = 80_000_000 - (i as u64 - 40) * 500_000;
         }
-        assert_eq!(ma_signal_reference(&prices, 0), 0);
+        assert!(!ma_signal_reference(&prices, 0));
     }
 
     /// Threshold filter: a small fast-vs-slow gap that crosses at th=0
@@ -168,10 +171,9 @@ mod tests {
         for i in 40..50 {
             prices[i] = 100_500_000;
         }
-        assert_eq!(ma_signal_reference(&prices, 0), 1, "no threshold => cross");
-        assert_eq!(
-            ma_signal_reference(&prices, 500),
-            0,
+        assert!(ma_signal_reference(&prices, 0), "no threshold => cross");
+        assert!(
+            !ma_signal_reference(&prices, 500),
             "5% threshold should reject a 0.5% gap",
         );
     }
@@ -180,11 +182,11 @@ mod tests {
     #[test]
     fn negative_threshold_is_clamped_to_zero() {
         let prices = [100_000_000u64; 50];
-        assert_eq!(ma_signal_reference(&prices, -1000), 0);
+        assert!(!ma_signal_reference(&prices, -1000));
         let mut up = [100_000_000u64; 50];
         for i in 40..50 {
             up[i] = 110_000_000;
         }
-        assert_eq!(ma_signal_reference(&up, -1000), 1);
+        assert!(ma_signal_reference(&up, -1000));
     }
 }

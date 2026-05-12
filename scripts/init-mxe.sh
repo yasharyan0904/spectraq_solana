@@ -65,8 +65,8 @@ echo
 echo "[init-mxe] (1/3) arcium build (--skip-program — vault built separately via cargo-build-sbf)"
 arcium build --skip-program
 
-if [[ ! -f build/compute_ma_signal.arcis ]]; then
-  echo "[init-mxe] ERROR: build/compute_ma_signal.arcis missing after arcium build" >&2
+if [[ ! -f build/compute_ma_signal_v3.arcis ]]; then
+  echo "[init-mxe] ERROR: build/compute_ma_signal_v3.arcis missing after arcium build" >&2
   exit 1
 fi
 echo
